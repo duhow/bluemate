@@ -1,6 +1,5 @@
 plugins {
     id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
 }
 
 def getGitVersionName = { ->
@@ -26,11 +25,11 @@ def getGitVersionCode = { ->
 }
 
 android {
-    namespace 'net.duhowpi.myapp'
+    namespace 'net.duhowpi.bluemate'
     compileSdk 35
 
     defaultConfig {
-        applicationId "net.duhowpi.myapp"
+        applicationId "net.duhowpi.bluemate"
         minSdk 26
         targetSdk 35
         versionCode getGitVersionCode()
@@ -52,8 +51,8 @@ android {
         targetCompatibility JavaVersion.VERSION_11
     }
 
-    kotlinOptions {
-        jvmTarget = '11'
+    kotlin {
+        jvmToolchain(11)
     }
 
     buildFeatures {
