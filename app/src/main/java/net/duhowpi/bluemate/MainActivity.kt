@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
 
     private var accelerometerValues: FloatArray? = null
     private var magnetometerValues: FloatArray? = null
+    private var lastCompassUpdateMs: Long = 0
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -159,6 +160,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         val orientation = FloatArray(3)
 
         if (SensorManager.getRotationMatrix(rotationMatrix, null, accel, magnet)) {
+            val now = System.currentTimeMillis()
+            if (now - lastCompassUpdateMs < 200) return
+            lastCompassUpdateMs = now
             SensorManager.getOrientation(rotationMatrix, orientation)
             val azimuthDeg = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toInt()
             val cardinal = getCardinalDirection(azimuthDeg)
