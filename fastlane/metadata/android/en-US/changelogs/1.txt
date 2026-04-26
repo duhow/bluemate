@@ -3,5 +3,5 @@ Initial release.
 - BLE iBeacon advertising and scanning to find nearby Bluemate users
 - Distance estimation in meters from RSSI signal strength
 - Compass orientation display using device sensors
-- Background foreground service for continuous operation
+- Foreground service for continuous scanning in the background
 - Battery optimization exemption request

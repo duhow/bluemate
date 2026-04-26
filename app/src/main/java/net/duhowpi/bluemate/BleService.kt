@@ -44,6 +44,7 @@ class BleService : Service() {
         const val DEVICE_TIMEOUT_MS = 30_000L
         const val CLEANUP_INTERVAL_MS = 5_000L
 
+        @Volatile
         var isRunning = false
             private set
     }
@@ -91,6 +92,8 @@ class BleService : Service() {
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
+        // Derive stable major/minor identifiers from the device's ANDROID_ID so that
+        // the same device always advertises the same iBeacon identity across restarts.
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
         val hash = deviceId.hashCode()
         deviceMajor = (hash ushr 16) and 0xFFFF
@@ -308,6 +311,9 @@ class BleService : Service() {
         }
     }
 
+    // Attempt to estimate distance using the iBeacon distance formula described at
+    // https://stackoverflow.com/a/20434019 — constants are empirically-derived
+    // calibration values widely used in iBeacon implementations.
     private fun calculateDistance(txPower: Int, rssi: Int): Double {
         if (rssi == 0) return -1.0
         val ratio = rssi.toDouble() / txPower.toDouble()
