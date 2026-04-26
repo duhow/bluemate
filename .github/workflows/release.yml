@@ -1,0 +1,82 @@
+name: Release Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  APP_NAME: app-release
+
+jobs:
+  release:
+    name: Build and Publish Release APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      KEYSTORE_FILE: release.jks
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version-file: .java-version
+          distribution: temurin
+          cache: gradle
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@319994f95fa847cf3fb3cd3dbe89f6dcde9f178f # tag v1.295.0
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+
+      - name: Decode Android keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/$KEYSTORE_FILE"
+
+      - name: Build release APK
+        id: build
+        run: bundle exec fastlane build build_type:Release
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/${{ env.KEYSTORE_FILE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Rename APK
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk "${{ env.APP_NAME }}-${{ github.ref_name }}.apk"
+
+      - name: Attest APK build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # tag v4.1.0
+        with:
+          subject-path: "${{ env.APP_NAME }}-${{ github.ref_name }}.apk"
+
+      - name: Create GitHub Release and upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.build.outputs.body }}
+          files: "${{ env.APP_NAME }}-${{ github.ref_name }}.apk"
+
+      - name: Prepare next version changelog
+        run: |
+          NEXT_VERSION=$(( ${{ steps.build.outputs.version_code }} + 1 ))
+          NEXT_CHANGELOG="fastlane/metadata/android/en-US/changelogs/${NEXT_VERSION}.txt"
+          git fetch origin main
+          git checkout main
+          if [ ! -f "$NEXT_CHANGELOG" ]; then
+            printf 'Add user-facing changes for the next release here.\n' > "$NEXT_CHANGELOG"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add "$NEXT_CHANGELOG"
+            git commit -m "chore: prepare changelog for version ${NEXT_VERSION}"
+            git push origin main
+          fi
