@@ -43,6 +43,9 @@ class BleService : Service() {
         const val TX_POWER_AT_1M: Byte = -59
         const val DEVICE_TIMEOUT_MS = 30_000L
         const val CLEANUP_INTERVAL_MS = 5_000L
+
+        var isRunning = false
+            private set
     }
 
     interface DeviceUpdateListener {
@@ -84,6 +87,7 @@ class BleService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
@@ -109,6 +113,7 @@ class BleService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
         handler.removeCallbacks(cleanupRunnable)
         stopAdvertising()
         stopScanning()
@@ -208,6 +213,7 @@ class BleService : Service() {
             .build()
 
         scanner?.startScan(listOf(filter), scanSettings, scanCallback)
+        isScanning = true
     }
 
     @Suppress("MissingPermission")

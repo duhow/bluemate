@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
 
     private var bleService: BleService? = null
     private var serviceBound = false
+    private var didBind = false
 
     private var accelerometerValues: FloatArray? = null
     private var magnetometerValues: FloatArray? = null
@@ -104,21 +105,35 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         updateUI()
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (BleService.isRunning && !didBind) {
+            didBind = bindService(
+                Intent(this, BleService::class.java),
+                serviceConnection,
+                0
+            )
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         registerSensors()
-        if (serviceBound) {
-            bindService(
-                Intent(this, BleService::class.java),
-                serviceConnection,
-                Context.BIND_AUTO_CREATE
-            )
-        }
     }
 
     override fun onPause() {
         super.onPause()
         sensorManager.unregisterListener(this)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (didBind) {
+            bleService?.listener = null
+            unbindService(serviceConnection)
+            didBind = false
+            serviceBound = false
+        }
     }
 
     private fun registerSensors() {
@@ -200,13 +215,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
     private fun startBleService() {
         val intent = Intent(this, BleService::class.java)
         ContextCompat.startForegroundService(this, intent)
-        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        didBind = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
     private fun stopBleService() {
-        if (serviceBound) {
+        if (didBind) {
             bleService?.listener = null
             unbindService(serviceConnection)
+            didBind = false
             serviceBound = false
             bleService = null
         }
