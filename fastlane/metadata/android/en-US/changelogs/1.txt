@@ -5,3 +5,6 @@ Initial release.
 - Compass orientation display using device sensors
 - Foreground service for continuous scanning in the background
 - Battery optimization exemption request
+- Fixed button being unreachable on fullscreen/edge-to-edge devices
+- Fixed two devices not being able to discover each other
+- Compass heading now updates smoothly every 0.2 seconds
