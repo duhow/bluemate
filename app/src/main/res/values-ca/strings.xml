@@ -1,3 +1,19 @@
 <resources>
-    <string name="app_name">My App</string>
+    <string name="app_name">Bluemate</string>
+
+    <string name="heading_compass">La teva Brúixola</string>
+
+    <string name="btn_start">Iniciar escaneig</string>
+    <string name="btn_stop">Aturar escaneig</string>
+
+    <string name="status_scanning">Cercant Bluemates propers…</string>
+    <string name="status_stopped">Aturat</string>
+
+    <string name="nearby_count">Bluemates propers (%1$d)</string>
+    <string name="no_devices">No s\'han trobat dispositius</string>
+
+    <string name="notification_channel_name">Servei Bluemate</string>
+    <string name="notification_channel_description">Manté Bluemate escanejant en segon pla</string>
+    <string name="notification_title">Bluemate està actiu</string>
+    <string name="notification_text">Cercant Bluemates propers</string>
 </resources>

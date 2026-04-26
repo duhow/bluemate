@@ -1,1 +1,1 @@
-Full description of app.
+Bluemate uses Bluetooth Low Energy (BLE) to discover other nearby Bluemate users. Each device advertises as an iBeacon and scans for others, reporting their estimated distance in meters. A built-in compass shows your current orientation to help locate nearby users. The app runs as a background service so it keeps working even when the screen is off.

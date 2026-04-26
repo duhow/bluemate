@@ -1,3 +1,19 @@
 <resources>
-    <string name="app_name">My App</string>
+    <string name="app_name">Bluemate</string>
+
+    <string name="heading_compass">Tu Brújula</string>
+
+    <string name="btn_start">Iniciar escaneo</string>
+    <string name="btn_stop">Detener escaneo</string>
+
+    <string name="status_scanning">Buscando Bluemates cercanos…</string>
+    <string name="status_stopped">Detenido</string>
+
+    <string name="nearby_count">Bluemates cercanos (%1$d)</string>
+    <string name="no_devices">No se encontraron dispositivos</string>
+
+    <string name="notification_channel_name">Servicio Bluemate</string>
+    <string name="notification_channel_description">Mantiene Bluemate escaneando en segundo plano</string>
+    <string name="notification_title">Bluemate está activo</string>
+    <string name="notification_text">Buscando Bluemates cercanos</string>
 </resources>

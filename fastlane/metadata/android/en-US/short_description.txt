@@ -1,1 +1,1 @@
-Short description of app.
+Find nearby Bluemate users via BLE iBeacon with distance and compass.

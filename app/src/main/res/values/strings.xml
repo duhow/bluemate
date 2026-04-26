@@ -1,3 +1,22 @@
 <resources>
-    <string name="app_name">My App</string>
+    <string name="app_name">Bluemate</string>
+
+    <string name="heading_compass">Your Compass</string>
+    <string name="compass_format">%1$d° %2$s</string>
+
+    <string name="btn_start">Start Scanning</string>
+    <string name="btn_stop">Stop Scanning</string>
+
+    <string name="status_scanning">Scanning for nearby Bluemates…</string>
+    <string name="status_stopped">Stopped</string>
+
+    <string name="nearby_count">Nearby Bluemates (%1$d)</string>
+    <string name="no_devices">No devices found yet</string>
+    <string name="device_label">Bluemate #%1$d.%2$d</string>
+    <string name="distance_format">%1$.1f m</string>
+
+    <string name="notification_channel_name">Bluemate Service</string>
+    <string name="notification_channel_description">Keeps Bluemate scanning in the background</string>
+    <string name="notification_title">Bluemate is running</string>
+    <string name="notification_text">Scanning for nearby Bluemates</string>
 </resources>
