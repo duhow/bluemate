@@ -22,6 +22,7 @@ import android.os.Binder
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelUuid
 import android.provider.Settings
 import android.util.Log
 import java.nio.ByteBuffer
@@ -38,8 +39,7 @@ class BleService : Service() {
         const val ACTION_STOP = "net.duhowpi.bluemate.STOP_SERVICE"
 
         val BEACON_UUID: UUID = UUID.fromString("b10e0a7e-d0b1-4e00-8a7e-b10e0a7ed0b1")
-        const val APPLE_COMPANY_ID = 0x004C
-        const val IBEACON_PREFIX = 0x0215
+        val BEACON_PARCEL_UUID = ParcelUuid(BEACON_UUID)
         const val TX_POWER_AT_1M: Byte = -59
         const val DEVICE_TIMEOUT_MS = 30_000L
         const val CLEANUP_INTERVAL_MS = 5_000L
@@ -93,7 +93,7 @@ class BleService : Service() {
         bluetoothAdapter = bluetoothManager.adapter
 
         // Derive stable major/minor identifiers from the device's ANDROID_ID so that
-        // the same device always advertises the same iBeacon identity across restarts.
+        // the same device always advertises the same identity across restarts.
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
         val hash = deviceId.hashCode()
         deviceMajor = (hash ushr 16) and 0xFFFF
@@ -181,8 +181,12 @@ class BleService : Service() {
             .setTimeout(0)
             .build()
 
+        // Encode device identity (major, minor, txPower) as service data keyed
+        // by the app's own UUID so any device running Bluemate can discover it.
+        val serviceData = buildServiceData()
+
         val data = AdvertiseData.Builder()
-            .addManufacturerData(APPLE_COMPANY_ID, buildIBeaconData())
+            .addServiceData(BEACON_PARCEL_UUID, serviceData)
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
             .build()
@@ -207,7 +211,7 @@ class BleService : Service() {
         }
 
         val filter = ScanFilter.Builder()
-            .setManufacturerData(APPLE_COMPANY_ID, buildIBeaconFilterData(), buildIBeaconFilterMask())
+            .setServiceData(BEACON_PARCEL_UUID, byteArrayOf(), byteArrayOf())
             .build()
 
         val scanSettings = ScanSettings.Builder()
@@ -227,64 +231,35 @@ class BleService : Service() {
         }
     }
 
-    private fun buildIBeaconData(): ByteArray {
-        val buffer = ByteBuffer.allocate(23)
-        buffer.putShort(IBEACON_PREFIX.toShort())
-        buffer.putLong(BEACON_UUID.mostSignificantBits)
-        buffer.putLong(BEACON_UUID.leastSignificantBits)
+    /** Encode major (2 bytes) + minor (2 bytes) + txPower (1 byte) = 5 bytes of service data. */
+    private fun buildServiceData(): ByteArray {
+        val buffer = ByteBuffer.allocate(5)
         buffer.putShort(deviceMajor.toShort())
         buffer.putShort(deviceMinor.toShort())
         buffer.put(TX_POWER_AT_1M)
         return buffer.array()
     }
 
-    private fun buildIBeaconFilterData(): ByteArray {
-        val buffer = ByteBuffer.allocate(23)
-        buffer.putShort(IBEACON_PREFIX.toShort())
-        buffer.putLong(BEACON_UUID.mostSignificantBits)
-        buffer.putLong(BEACON_UUID.leastSignificantBits)
-        buffer.putShort(0)
-        buffer.putShort(0)
-        buffer.put(0)
-        return buffer.array()
-    }
-
-    private fun buildIBeaconFilterMask(): ByteArray {
-        val mask = ByteArray(23)
-        for (i in 0 until 18) {
-            mask[i] = 0xFF.toByte()
-        }
-        return mask
-    }
-
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             isAdvertising = true
-            Log.i(TAG, "iBeacon advertising started")
+            Log.i(TAG, "BLE advertising started")
         }
 
         override fun onStartFailure(errorCode: Int) {
             isAdvertising = false
-            Log.e(TAG, "iBeacon advertising failed: $errorCode")
+            Log.e(TAG, "BLE advertising failed: $errorCode")
         }
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val manufacturerData = result.scanRecord?.getManufacturerSpecificData(APPLE_COMPANY_ID)
+            val serviceData = result.scanRecord?.getServiceData(BEACON_PARCEL_UUID)
                 ?: return
 
-            if (manufacturerData.size < 23) return
+            if (serviceData.size < 5) return
 
-            val buffer = ByteBuffer.wrap(manufacturerData)
-            val prefix = buffer.short.toInt() and 0xFFFF
-            if (prefix != IBEACON_PREFIX) return
-
-            val msb = buffer.long
-            val lsb = buffer.long
-            val uuid = UUID(msb, lsb)
-            if (uuid != BEACON_UUID) return
-
+            val buffer = ByteBuffer.wrap(serviceData)
             val major = buffer.short.toInt() and 0xFFFF
             val minor = buffer.short.toInt() and 0xFFFF
             val txPower = buffer.get().toInt()
