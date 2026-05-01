@@ -212,7 +212,7 @@ class BleService : Service() {
         }
 
         val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(BEACON_UUID))
+            .setManufacturerData(APPLE_COMPANY_ID, buildIBeaconFilterData(), buildIBeaconFilterMask())
             .build()
 
         val scanSettings = ScanSettings.Builder()
