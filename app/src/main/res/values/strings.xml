@@ -13,6 +13,9 @@
     <string name="nearby_count">Nearby Bluemates (%1$d)</string>
     <string name="no_devices">No devices found yet</string>
     <string name="device_label">Bluemate #%1$d.%2$d</string>
+    <string name="paired_device_label">Paired: %1$s</string>
+    <string name="paired_not_in_range">Paired (not in range)</string>
+    <string name="device_unknown">Unknown device</string>
     <string name="distance_format">%1$.1f m</string>
 
     <string name="notification_channel_name">Bluemate Service</string>

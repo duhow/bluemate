@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
@@ -13,7 +14,6 @@ import android.bluetooth.le.AdvertiseSettings
 import android.bluetooth.le.BluetoothLeAdvertiser
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -75,10 +75,15 @@ class BleService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
 
+    private fun pairedId(address: String): String = "paired:$address"
+
     private val cleanupRunnable = object : Runnable {
         override fun run() {
+            mergeBondedDevices()
             val now = System.currentTimeMillis()
-            val removed = nearbyDevices.entries.removeAll { now - it.value.lastSeen > DEVICE_TIMEOUT_MS }
+            val removed = nearbyDevices.entries.removeAll {
+                !it.value.isPaired && now - it.value.lastSeen > DEVICE_TIMEOUT_MS
+            }
             if (removed) notifyDevicesUpdated()
             handler.postDelayed(this, CLEANUP_INTERVAL_MS)
         }
@@ -101,6 +106,7 @@ class BleService : Service() {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
+        mergeBondedDevices()
         startAdvertising()
         startScanning()
         handler.postDelayed(cleanupRunnable, CLEANUP_INTERVAL_MS)
@@ -210,17 +216,43 @@ class BleService : Service() {
             return
         }
 
-        val filter = ScanFilter.Builder()
-            .setServiceData(BEACON_PARCEL_UUID, byteArrayOf(), byteArrayOf())
-            .build()
-
         val scanSettings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setReportDelay(0)
+            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+            .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+            .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
             .build()
 
-        scanner?.startScan(listOf(filter), scanSettings, scanCallback)
+        // Do not apply strict service-data filters here. Some Android devices behave
+        // inconsistently with zero/partial masks and can drop valid packets.
+        // Scan broadly and validate our app UUID in callback parsing.
+        scanner?.startScan(emptyList(), scanSettings, scanCallback)
         isScanning = true
+    }
+
+    @Suppress("MissingPermission")
+    private fun mergeBondedDevices() {
+        val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
+        bonded.forEach { device ->
+            val address = device.address ?: return@forEach
+            val key = pairedId(address)
+            nearbyDevices.putIfAbsent(
+                key,
+                NearbyDevice(
+                    id = key,
+                    major = -1,
+                    minor = -1,
+                    rssi = Int.MIN_VALUE,
+                    distance = Double.POSITIVE_INFINITY,
+                    lastSeen = 0L,
+                    address = address,
+                    displayName = device.name,
+                    isPaired = true,
+                    isInRange = false
+                )
+            )
+        }
     }
 
     @Suppress("MissingPermission")
@@ -268,6 +300,13 @@ class BleService : Service() {
 
             val distance = calculateDistance(txPower, result.rssi)
             val id = "$major.$minor"
+            val now = System.currentTimeMillis()
+            val device = result.device
+            val address = device?.address
+            val isBonded = device?.bondState == BluetoothDevice.BOND_BONDED
+            if (!address.isNullOrEmpty()) {
+                nearbyDevices.remove(pairedId(address))
+            }
 
             nearbyDevices[id] = NearbyDevice(
                 id = id,
@@ -275,7 +314,11 @@ class BleService : Service() {
                 minor = minor,
                 rssi = result.rssi,
                 distance = distance,
-                lastSeen = System.currentTimeMillis()
+                lastSeen = now,
+                address = address,
+                displayName = device?.name,
+                isPaired = isBonded,
+                isInRange = true
             )
             notifyDevicesUpdated()
         }
@@ -300,7 +343,10 @@ class BleService : Service() {
     }
 
     private fun notifyDevicesUpdated() {
-        val devices = nearbyDevices.values.sortedBy { it.distance }
+        val devices = nearbyDevices.values.sortedWith(
+            compareByDescending<NearbyDevice> { it.isInRange }
+                .thenBy { it.distance }
+        )
         handler.post { listener?.onDevicesUpdated(devices) }
     }
 }
