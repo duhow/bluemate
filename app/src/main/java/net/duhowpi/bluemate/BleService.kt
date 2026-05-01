@@ -19,7 +19,6 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.os.Binder
-import android.os.ParcelUuid
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -188,11 +187,7 @@ class BleService : Service() {
             .setIncludeTxPowerLevel(false)
             .build()
 
-        val scanResponse = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(BEACON_UUID))
-            .build()
-
-        advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+        advertiser?.startAdvertising(settings, data, advertiseCallback)
     }
 
     @Suppress("MissingPermission")
