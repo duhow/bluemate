@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
@@ -13,16 +14,15 @@ import android.bluetooth.le.AdvertiseSettings
 import android.bluetooth.le.BluetoothLeAdvertiser
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.os.Binder
-import android.os.ParcelUuid
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelUuid
 import android.provider.Settings
 import android.util.Log
 import java.nio.ByteBuffer
@@ -39,8 +39,7 @@ class BleService : Service() {
         const val ACTION_STOP = "net.duhowpi.bluemate.STOP_SERVICE"
 
         val BEACON_UUID: UUID = UUID.fromString("b10e0a7e-d0b1-4e00-8a7e-b10e0a7ed0b1")
-        const val APPLE_COMPANY_ID = 0x004C
-        const val IBEACON_PREFIX = 0x0215
+        val BEACON_PARCEL_UUID = ParcelUuid(BEACON_UUID)
         const val TX_POWER_AT_1M: Byte = -59
         const val DEVICE_TIMEOUT_MS = 30_000L
         const val CLEANUP_INTERVAL_MS = 5_000L
@@ -76,10 +75,15 @@ class BleService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
 
+    private fun pairedId(address: String): String = "paired:$address"
+
     private val cleanupRunnable = object : Runnable {
         override fun run() {
+            mergeBondedDevices()
             val now = System.currentTimeMillis()
-            val removed = nearbyDevices.entries.removeAll { now - it.value.lastSeen > DEVICE_TIMEOUT_MS }
+            val removed = nearbyDevices.entries.removeAll {
+                !it.value.isPaired && now - it.value.lastSeen > DEVICE_TIMEOUT_MS
+            }
             if (removed) notifyDevicesUpdated()
             handler.postDelayed(this, CLEANUP_INTERVAL_MS)
         }
@@ -94,7 +98,7 @@ class BleService : Service() {
         bluetoothAdapter = bluetoothManager.adapter
 
         // Derive stable major/minor identifiers from the device's ANDROID_ID so that
-        // the same device always advertises the same iBeacon identity across restarts.
+        // the same device always advertises the same identity across restarts.
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
         val hash = deviceId.hashCode()
         deviceMajor = (hash ushr 16) and 0xFFFF
@@ -102,6 +106,7 @@ class BleService : Service() {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
+        mergeBondedDevices()
         startAdvertising()
         startScanning()
         handler.postDelayed(cleanupRunnable, CLEANUP_INTERVAL_MS)
@@ -182,17 +187,17 @@ class BleService : Service() {
             .setTimeout(0)
             .build()
 
+        // Encode device identity (major, minor, txPower) as service data keyed
+        // by the app's own UUID so any device running Bluemate can discover it.
+        val serviceData = buildServiceData()
+
         val data = AdvertiseData.Builder()
-            .addManufacturerData(APPLE_COMPANY_ID, buildIBeaconData())
+            .addServiceData(BEACON_PARCEL_UUID, serviceData)
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
             .build()
 
-        val scanResponse = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(BEACON_UUID))
-            .build()
-
-        advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+        advertiser?.startAdvertising(settings, data, advertiseCallback)
     }
 
     @Suppress("MissingPermission")
@@ -211,17 +216,43 @@ class BleService : Service() {
             return
         }
 
-        val filter = ScanFilter.Builder()
-            .setManufacturerData(APPLE_COMPANY_ID, buildIBeaconFilterData(), buildIBeaconFilterMask())
-            .build()
-
         val scanSettings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setReportDelay(0)
+            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+            .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+            .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
             .build()
 
-        scanner?.startScan(listOf(filter), scanSettings, scanCallback)
+        // Do not apply strict service-data filters here. Some Android devices behave
+        // inconsistently with zero/partial masks and can drop valid packets.
+        // Scan broadly and validate our app UUID in callback parsing.
+        scanner?.startScan(emptyList(), scanSettings, scanCallback)
         isScanning = true
+    }
+
+    @Suppress("MissingPermission")
+    private fun mergeBondedDevices() {
+        val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
+        bonded.forEach { device ->
+            val address = device.address ?: return@forEach
+            val key = pairedId(address)
+            nearbyDevices.putIfAbsent(
+                key,
+                NearbyDevice(
+                    id = key,
+                    major = -1,
+                    minor = -1,
+                    rssi = Int.MIN_VALUE,
+                    distance = Double.POSITIVE_INFINITY,
+                    lastSeen = 0L,
+                    address = address,
+                    displayName = device.name,
+                    isPaired = true,
+                    isInRange = false
+                )
+            )
+        }
     }
 
     @Suppress("MissingPermission")
@@ -232,64 +263,35 @@ class BleService : Service() {
         }
     }
 
-    private fun buildIBeaconData(): ByteArray {
-        val buffer = ByteBuffer.allocate(23)
-        buffer.putShort(IBEACON_PREFIX.toShort())
-        buffer.putLong(BEACON_UUID.mostSignificantBits)
-        buffer.putLong(BEACON_UUID.leastSignificantBits)
+    /** Encode major (2 bytes) + minor (2 bytes) + txPower (1 byte) = 5 bytes of service data. */
+    private fun buildServiceData(): ByteArray {
+        val buffer = ByteBuffer.allocate(5)
         buffer.putShort(deviceMajor.toShort())
         buffer.putShort(deviceMinor.toShort())
         buffer.put(TX_POWER_AT_1M)
         return buffer.array()
     }
 
-    private fun buildIBeaconFilterData(): ByteArray {
-        val buffer = ByteBuffer.allocate(23)
-        buffer.putShort(IBEACON_PREFIX.toShort())
-        buffer.putLong(BEACON_UUID.mostSignificantBits)
-        buffer.putLong(BEACON_UUID.leastSignificantBits)
-        buffer.putShort(0)
-        buffer.putShort(0)
-        buffer.put(0)
-        return buffer.array()
-    }
-
-    private fun buildIBeaconFilterMask(): ByteArray {
-        val mask = ByteArray(23)
-        for (i in 0 until 18) {
-            mask[i] = 0xFF.toByte()
-        }
-        return mask
-    }
-
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             isAdvertising = true
-            Log.i(TAG, "iBeacon advertising started")
+            Log.i(TAG, "BLE advertising started")
         }
 
         override fun onStartFailure(errorCode: Int) {
             isAdvertising = false
-            Log.e(TAG, "iBeacon advertising failed: $errorCode")
+            Log.e(TAG, "BLE advertising failed: $errorCode")
         }
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val manufacturerData = result.scanRecord?.getManufacturerSpecificData(APPLE_COMPANY_ID)
+            val serviceData = result.scanRecord?.getServiceData(BEACON_PARCEL_UUID)
                 ?: return
 
-            if (manufacturerData.size < 23) return
+            if (serviceData.size < 5) return
 
-            val buffer = ByteBuffer.wrap(manufacturerData)
-            val prefix = buffer.short.toInt() and 0xFFFF
-            if (prefix != IBEACON_PREFIX) return
-
-            val msb = buffer.long
-            val lsb = buffer.long
-            val uuid = UUID(msb, lsb)
-            if (uuid != BEACON_UUID) return
-
+            val buffer = ByteBuffer.wrap(serviceData)
             val major = buffer.short.toInt() and 0xFFFF
             val minor = buffer.short.toInt() and 0xFFFF
             val txPower = buffer.get().toInt()
@@ -298,6 +300,13 @@ class BleService : Service() {
 
             val distance = calculateDistance(txPower, result.rssi)
             val id = "$major.$minor"
+            val now = System.currentTimeMillis()
+            val device = result.device
+            val address = device?.address
+            val isBonded = device?.bondState == BluetoothDevice.BOND_BONDED
+            if (!address.isNullOrEmpty()) {
+                nearbyDevices.remove(pairedId(address))
+            }
 
             nearbyDevices[id] = NearbyDevice(
                 id = id,
@@ -305,7 +314,11 @@ class BleService : Service() {
                 minor = minor,
                 rssi = result.rssi,
                 distance = distance,
-                lastSeen = System.currentTimeMillis()
+                lastSeen = now,
+                address = address,
+                displayName = device?.name,
+                isPaired = isBonded,
+                isInRange = true
             )
             notifyDevicesUpdated()
         }
@@ -330,7 +343,10 @@ class BleService : Service() {
     }
 
     private fun notifyDevicesUpdated() {
-        val devices = nearbyDevices.values.sortedBy { it.distance }
+        val devices = nearbyDevices.values.sortedWith(
+            compareByDescending<NearbyDevice> { it.isInRange }
+                .thenBy { it.distance }
+        )
         handler.post { listener?.onDevicesUpdated(devices) }
     }
 }

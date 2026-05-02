@@ -31,11 +31,19 @@ class DeviceAdapter : ListAdapter<NearbyDevice, DeviceAdapter.ViewHolder>(DiffCa
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val device = getItem(position)
-        holder.nameText.text = holder.itemView.context.getString(
-            R.string.device_label, device.major, device.minor
-        )
-        holder.distanceText.text = holder.itemView.context.getString(
-            R.string.distance_format, device.distance
-        )
+        val context = holder.itemView.context
+        holder.nameText.text = if (device.major >= 0 && device.minor >= 0) {
+            context.getString(R.string.device_label, device.major, device.minor)
+        } else {
+            context.getString(
+                R.string.paired_device_label,
+                device.displayName ?: device.address ?: context.getString(R.string.device_unknown)
+            )
+        }
+        holder.distanceText.text = if (device.isInRange && device.distance.isFinite()) {
+            context.getString(R.string.distance_format, device.distance)
+        } else {
+            context.getString(R.string.paired_not_in_range)
+        }
     }
 }

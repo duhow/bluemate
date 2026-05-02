@@ -8,3 +8,5 @@ Initial release.
 - Fixed button being unreachable on fullscreen/edge-to-edge devices
 - Fixed two devices not being able to discover each other
 - Compass heading now updates smoothly every 0.2 seconds
+- Improved Android 13+ nearby discovery reliability by fixing BLE scan matching
+- Paired Bluetooth devices now stay visible in the list, even when temporarily out of range
