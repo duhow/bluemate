@@ -31,6 +31,7 @@ Bluemate uses Bluetooth Low Energy (BLE) to discover other nearby users running 
 ### Features
 
 - **iBeacon advertising & scanning** – automatically broadcasts and discovers nearby Bluemate users.
+- **Selectable discovery mode** – choose between full scan mode (announce + discover) or beacon-only mode (announce only) for devices that cannot reliably do both at once.
 - **Distance estimation** – calculates approximate distance in meters from BLE signal strength (RSSI).
 - **Compass** – displays your device orientation using accelerometer and magnetometer sensors.
 - **Background service** – runs as an Android foreground service so scanning continues when the app is in the background.

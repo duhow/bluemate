@@ -6,8 +6,10 @@
 
     <string name="btn_start">Start Scanning</string>
     <string name="btn_stop">Stop Scanning</string>
+    <string name="discovery_mode_label">Mode</string>
 
     <string name="status_scanning">Scanning for nearby Bluemates…</string>
+    <string name="status_beacon_only">Beacon mode: announcing only</string>
     <string name="status_stopped">Stopped</string>
 
     <string name="nearby_count">Nearby Bluemates (%1$d)</string>
@@ -22,4 +24,5 @@
     <string name="notification_channel_description">Keeps Bluemate scanning in the background</string>
     <string name="notification_title">Bluemate is running</string>
     <string name="notification_text">Scanning for nearby Bluemates</string>
+    <string name="notification_text_beacon">Beacon mode active (announcing only)</string>
 </resources>

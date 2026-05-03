@@ -24,4 +24,9 @@
         <item>Español</item>
         <item>Català</item>
     </string-array>
+
+    <string-array name="discovery_mode_options">
+        <item>Scan nearby users</item>
+        <item>Beacon only (be found)</item>
+    </string-array>
 </resources>
