@@ -5,4 +5,5 @@
     <color name="blue_light">#42A5F5</color>
     <color name="white">#FFFFFF</color>
     <color name="ic_launcher_background">#1565C0</color>
+    <color name="device_stale">#757575</color>
 </resources>

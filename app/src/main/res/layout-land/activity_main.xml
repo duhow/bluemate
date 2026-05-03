@@ -22,13 +22,29 @@
             android:textAppearance="?attr/textAppearanceTitleMedium"
             android:layout_marginBottom="4dp" />
 
-        <TextView
-            android:id="@+id/compassText"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textAppearance="?attr/textAppearanceHeadlineLarge"
-            android:layout_marginBottom="16dp"
-            tools:text="273° W" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp">
+
+            <TextView
+                android:id="@+id/compassText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceHeadlineLarge"
+                tools:text="273° W" />
+
+            <TextView
+                android:id="@+id/compassArrow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="↑"
+                android:textSize="32sp"
+                android:layout_marginStart="12dp" />
+
+        </LinearLayout>
 
         <TextView
             android:id="@+id/statusText"

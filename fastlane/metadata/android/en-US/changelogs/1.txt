@@ -12,3 +12,7 @@ Initial release.
 - Paired Bluetooth devices now stay visible in the list, even when temporarily out of range
 - Added a discovery mode selector so you can run scan mode or beacon-only mode for better cross-device detection
 - Fixed nearby device discovery by requesting required location permissions automatically
+- Paired and unavailable devices are now hidden from the scan view; only visible Bluemates are shown
+- Devices that have not responded in over 15 seconds are shown in grey
+- A rotating compass arrow now shows your current heading on the main screen
+- Beacon now broadcasts every second and includes the compass heading, so nearby users can see your direction arrow
