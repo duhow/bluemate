@@ -19,6 +19,10 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
@@ -36,7 +40,7 @@ import java.util.concurrent.ConcurrentHashMap
 import androidx.core.content.ContextCompat
 import kotlin.math.pow
 
-class BleService : Service() {
+class BleService : Service(), SensorEventListener {
 
     companion object {
         private const val TAG = "BleService"
@@ -68,6 +72,7 @@ class BleService : Service() {
 
     interface DeviceUpdateListener {
         fun onDevicesUpdated(devices: List<NearbyDevice>)
+        fun onCompassUpdated(heading: Int) {}
         fun onCallReceived(senderMajor: Int, senderMinor: Int) {}
         fun onAckReceived(targetMajor: Int, targetMinor: Int) {}
     }
@@ -101,6 +106,12 @@ class BleService : Service() {
     private val pendingRelays = ArrayDeque<ByteArray>()
     private val forwardedPings = LinkedHashMap<String, Long>()
     private var currentRingtone: Ringtone? = null
+
+    // Compass sensor state
+    private lateinit var sensorManager: SensorManager
+    private var accelerometerValues: FloatArray? = null
+    private var magnetometerValues: FloatArray? = null
+    private var lastCompassUpdateMs: Long = 0
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -157,6 +168,14 @@ class BleService : Service() {
         deviceMajor = (hash ushr 16) and 0xFFFF
         deviceMinor = hash and 0xFFFF
 
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI, handler)
+        }
+        sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI, handler)
+        }
+
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
         mergeBondedDevices()
@@ -177,6 +196,7 @@ class BleService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        sensorManager.unregisterListener(this)
         handler.removeCallbacks(cleanupRunnable)
         handler.removeCallbacks(beaconRefreshRunnable)
         stopAdvertising()
@@ -360,9 +380,27 @@ class BleService : Service() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun setCompassHeading(heading: Int) {
-        compassHeading = heading
+    override fun onSensorChanged(event: SensorEvent) {
+        when (event.sensor.type) {
+            Sensor.TYPE_ACCELEROMETER -> accelerometerValues = event.values.clone()
+            Sensor.TYPE_MAGNETIC_FIELD -> magnetometerValues = event.values.clone()
+        }
+        val accel = accelerometerValues ?: return
+        val magnet = magnetometerValues ?: return
+        val rotationMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+        if (SensorManager.getRotationMatrix(rotationMatrix, null, accel, magnet)) {
+            val now = System.currentTimeMillis()
+            if (now - lastCompassUpdateMs < 200) return
+            lastCompassUpdateMs = now
+            SensorManager.getOrientation(rotationMatrix, orientation)
+            val azimuthDeg = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toInt()
+            compassHeading = azimuthDeg
+            listener?.onCompassUpdated(azimuthDeg)
+        }
     }
+
+    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
 
     /** Send a call ping to the device identified by [targetMajor] and [targetMinor]. */
     fun sendPing(targetMajor: Int, targetMinor: Int) {
@@ -460,13 +498,17 @@ class BleService : Service() {
         // Ignore packets originating from this device
         if (srcMajor == deviceMajor && srcMinor == deviceMinor) return
 
+        val pingId = "$srcMajor.$srcMinor->$dstMajor.$dstMinor:$ack"
+
         if (dstMajor == deviceMajor && dstMinor == deviceMinor) {
+            // Deduplicate: only handle each unique call/ack once per expiry window
+            if (forwardedPings.containsKey(pingId)) return
+            forwardedPings[pingId] = System.currentTimeMillis()
+
             if (ack == 0) {
                 // Incoming call: play audio and reply with ACK
-                handler.post {
-                    startCallAudio()
-                    listener?.onCallReceived(srcMajor, srcMinor)
-                }
+                startCallAudio()
+                listener?.onCallReceived(srcMajor, srcMinor)
                 val ackData = buildPingData(
                     srcMajor = deviceMajor, srcMinor = deviceMinor,
                     dstMajor = srcMajor, dstMinor = srcMinor,
@@ -475,7 +517,7 @@ class BleService : Service() {
                 advertisePing(ackData)
             } else {
                 // ACK received: the target confirmed the call
-                handler.post { listener?.onAckReceived(srcMajor, srcMinor) }
+                listener?.onAckReceived(srcMajor, srcMinor)
             }
             return
         }
@@ -483,7 +525,6 @@ class BleService : Service() {
         // Relay: forward if TTL allows and we have not already forwarded this ping
         if (ttl <= 0) return
 
-        val pingId = "$srcMajor.$srcMinor->$dstMajor.$dstMinor:$ack"
         if (forwardedPings.containsKey(pingId)) return
         forwardedPings[pingId] = System.currentTimeMillis()
 
