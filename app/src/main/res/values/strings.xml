@@ -38,6 +38,6 @@
     <string name="notification_call_channel_name">Incoming Calls</string>
     <string name="notification_call_channel_description">Shows a heads-up alert when another Bluemate device calls you</string>
     <string name="notification_call_title">Incoming Bluemate call</string>
-    <string name="notification_call_text">Bluemate #%1$d.%2$d is calling you</string>
+    <string name="notification_call_text">%1$s is calling you</string>
     <string name="btn_dismiss_call">Dismiss</string>
 </resources>

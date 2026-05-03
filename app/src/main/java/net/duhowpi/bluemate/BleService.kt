@@ -350,7 +350,7 @@ class BleService : Service(), SensorEventListener {
 
         val notification = Notification.Builder(this, CALL_NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_call_title))
-            .setContentText(getString(R.string.notification_call_text, srcMajor, srcMinor))
+            .setContentText(getString(R.string.notification_call_text, DeviceNameGenerator.generate(srcMajor, srcMinor)))
             .setSmallIcon(R.drawable.ic_bluetooth_notification)
             .setContentIntent(openPending)
             .setAutoCancel(false)
