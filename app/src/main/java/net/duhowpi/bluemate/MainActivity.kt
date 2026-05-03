@@ -73,8 +73,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         if (results.values.all { it }) {
-            checkBatteryOptimization()
+            checkBackgroundLocation()
         }
+    }
+
+    private val backgroundLocationLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        checkBatteryOptimization()
     }
 
     private val bluetoothEnableLauncher = registerForActivityResult(
@@ -206,9 +212,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (needed.isEmpty()) {
-            checkBatteryOptimization()
+            checkBackgroundLocation()
         } else {
             permissionLauncher.launch(needed.toTypedArray())
+        }
+    }
+
+    private fun checkBackgroundLocation() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                != PackageManager.PERMISSION_GRANTED
+        ) {
+            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        } else {
+            checkBatteryOptimization()
         }
     }
 
@@ -297,9 +314,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
             permissions.add(Manifest.permission.BLUETOOTH_SCAN)
             permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
