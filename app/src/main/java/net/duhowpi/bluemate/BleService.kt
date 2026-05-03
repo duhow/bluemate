@@ -113,8 +113,18 @@ class BleService : Service() {
             val removed = nearbyDevices.entries.removeAll {
                 !it.value.isPaired && now - it.value.lastSeen > DEVICE_TIMEOUT_MS
             }
+            forwardedPings.entries.removeAll { now - it.value > PING_FORWARDED_EXPIRY_MS }
             if (removed) notifyDevicesUpdated()
             handler.postDelayed(this, CLEANUP_INTERVAL_MS)
+        }
+    }
+
+    // On API < 28, Ringtone does not support isLooping, so we restart playback manually.
+    private val ringRepeatRunnable = object : Runnable {
+        override fun run() {
+            val ringtone = currentRingtone ?: return
+            if (!ringtone.isPlaying) ringtone.play()
+            handler.postDelayed(this, 1_000L)
         }
     }
 
@@ -366,6 +376,7 @@ class BleService : Service() {
 
     /** Stop any currently playing call ringtone. */
     fun stopCallAudio() {
+        handler.removeCallbacks(ringRepeatRunnable)
         currentRingtone?.stop()
         currentRingtone = null
     }
@@ -473,10 +484,8 @@ class BleService : Service() {
         if (ttl <= 0) return
 
         val pingId = "$srcMajor.$srcMinor->$dstMajor.$dstMinor:$ack"
-        val now = System.currentTimeMillis()
-        forwardedPings.entries.removeAll { now - it.value > PING_FORWARDED_EXPIRY_MS }
         if (forwardedPings.containsKey(pingId)) return
-        forwardedPings[pingId] = now
+        forwardedPings[pingId] = System.currentTimeMillis()
 
         val relayData = buildPingData(srcMajor, srcMinor, dstMajor, dstMinor, ack, ttl - 1)
         advertisePing(relayData)
@@ -486,13 +495,19 @@ class BleService : Service() {
     private fun startCallAudio() {
         stopCallAudio()
         val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-        val ringtone = RingtoneManager.getRingtone(applicationContext, uri) ?: return
+        val ringtone = RingtoneManager.getRingtone(applicationContext, uri)
+        if (ringtone == null) {
+            Log.w(TAG, "Could not obtain ringtone for call audio")
+            return
+        }
         ringtone.audioAttributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             ringtone.isLooping = true
+        } else {
+            handler.postDelayed(ringRepeatRunnable, 1_000L)
         }
         ringtone.play()
         currentRingtone = ringtone
@@ -528,7 +543,8 @@ class BleService : Service() {
 
             // Ping/call packets are 10 bytes and start with PACKET_TYPE_PING
             if (serviceData.size == PING_PACKET_SIZE && serviceData[0] == PACKET_TYPE_PING) {
-                handlePingPacket(serviceData)
+                val dataCopy = serviceData.clone()
+                handler.post { handlePingPacket(dataCopy) }
                 return
             }
 
