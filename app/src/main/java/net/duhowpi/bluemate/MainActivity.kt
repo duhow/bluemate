@@ -112,13 +112,11 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
 
         deviceNaming = DeviceNaming(this)
 
-        val ownMajor: Int
-        val ownMinor: Int
-        val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
-        val hash = deviceId.hashCode()
-        ownMajor = (hash ushr 16) and 0xFFFF
-        ownMinor = hash and 0xFFFF
-        ownNameText.text = getString(R.string.your_name, DeviceNameGenerator.generate(ownMajor, ownMinor))
+        val ownHash = (Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown").hashCode()
+        ownNameText.text = getString(
+            R.string.your_name,
+            DeviceNameGenerator.generate((ownHash ushr 16) and 0xFFFF, ownHash and 0xFFFF)
+        )
 
         val modeAdapter = ArrayAdapter.createFromResource(
             this,
@@ -194,8 +192,7 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
 
     override fun onDevicesUpdated(devices: List<NearbyDevice>) {
         lastDevices = devices
-        val namedDevices = deviceNaming.applyNames(devices)
-        deviceAdapter.submitList(namedDevices)
+        refreshDeviceList()
         deviceCountText.text = getString(R.string.nearby_count, devices.size)
         emptyText.visibility = if (devices.isEmpty()) android.view.View.VISIBLE else android.view.View.GONE
         deviceList.visibility = if (devices.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
@@ -224,16 +221,18 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 val entered = input.text.toString().trim()
                 deviceNaming.setCustomName(device.major, device.minor, entered.ifEmpty { null })
-                val namedDevices = deviceNaming.applyNames(lastDevices)
-                deviceAdapter.submitList(namedDevices)
+                refreshDeviceList()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .setNeutralButton(R.string.rename_reset) { _, _ ->
                 deviceNaming.setCustomName(device.major, device.minor, null)
-                val namedDevices = deviceNaming.applyNames(lastDevices)
-                deviceAdapter.submitList(namedDevices)
+                refreshDeviceList()
             }
             .show()
+    }
+
+    private fun refreshDeviceList() {
+        deviceAdapter.submitList(deviceNaming.applyNames(lastDevices))
     }
 
     private fun requestPermissionsAndStart() {
