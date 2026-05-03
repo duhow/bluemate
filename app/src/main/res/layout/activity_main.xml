@@ -60,7 +60,6 @@
         android:id="@+id/modeLabelText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
         android:text="@string/discovery_mode_label"
         android:textAppearance="?attr/textAppearanceBodyMedium" />
 
@@ -68,7 +67,8 @@
         android:id="@+id/modeSpinner"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp" />
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="8dp" />
 
     <Button
         android:id="@+id/toggleButton"

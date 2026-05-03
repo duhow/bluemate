@@ -96,7 +96,12 @@ class BleService : Service() {
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder = binder
+    override fun onBind(intent: Intent?): IBinder {
+        if (!isAdvertising && !isScanning) {
+            applyMode(mode)
+        }
+        return binder
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -122,7 +127,7 @@ class BleService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val requestedMode = intent?.getIntExtra(EXTRA_MODE, MODE_SCAN) ?: MODE_SCAN
+        val requestedMode = intent?.getIntExtra(EXTRA_MODE, mode) ?: mode
         applyMode(requestedMode)
         return START_STICKY
     }
@@ -169,7 +174,7 @@ class BleService : Service() {
                 if (mode == MODE_BEACON_ONLY) {
                     getString(R.string.notification_text_beacon)
                 } else {
-                    getString(R.string.notification_text_scan)
+                    getString(R.string.notification_text)
                 }
             )
             .setSmallIcon(R.drawable.ic_bluetooth_notification)

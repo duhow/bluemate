@@ -104,11 +104,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         deviceList = findViewById(R.id.deviceList)
         emptyText = findViewById(R.id.emptyText)
 
-        modeSpinner.adapter = ArrayAdapter.createFromResource(
+        val modeAdapter = ArrayAdapter.createFromResource(
             this,
             R.array.discovery_mode_options,
-            android.R.layout.simple_spinner_dropdown_item
+            android.R.layout.simple_spinner_item
         )
+        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        modeSpinner.adapter = modeAdapter
 
         deviceList.layoutManager = LinearLayoutManager(this)
         deviceList.adapter = deviceAdapter
@@ -259,7 +261,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
 
     private fun updateUI() {
         if (serviceBound) {
-            val serviceMode = bleService?.mode ?: getSelectedMode()
+            val serviceMode = bleService?.mode ?: BleService.MODE_SCAN
             modeSpinner.setSelection(
                 if (serviceMode == BleService.MODE_BEACON_ONLY) 1 else 0,
                 false

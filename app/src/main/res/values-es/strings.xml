@@ -24,6 +24,5 @@
     <string name="notification_channel_description">Mantiene Bluemate escaneando en segundo plano</string>
     <string name="notification_title">Bluemate está activo</string>
     <string name="notification_text">Buscando Bluemates cercanos</string>
-    <string name="notification_text_scan">Buscando Bluemates cercanos</string>
     <string name="notification_text_beacon">Modo baliza activo (solo anunciar)</string>
 </resources>
