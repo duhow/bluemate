@@ -25,4 +25,7 @@
     <string name="notification_title">Bluemate està actiu</string>
     <string name="notification_text">Cercant Bluemates propers</string>
     <string name="notification_text_beacon">Mode balisa actiu (només anunciar)</string>
+
+    <string name="call_initiated">Trucant a Bluemate #%1$d.%2$d…</string>
+    <string name="call_ack_received">Bluemate #%1$d.%2$d ha rebut la teva trucada</string>
 </resources>

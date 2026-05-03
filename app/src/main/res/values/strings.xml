@@ -25,4 +25,7 @@
     <string name="notification_title">Bluemate is running</string>
     <string name="notification_text">Scanning for nearby Bluemates</string>
     <string name="notification_text_beacon">Beacon mode active (announcing only)</string>
+
+    <string name="call_initiated">Calling Bluemate #%1$d.%2$d…</string>
+    <string name="call_ack_received">Bluemate #%1$d.%2$d received your call</string>
 </resources>

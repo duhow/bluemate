@@ -16,3 +16,6 @@ Initial release.
 - Devices that have not responded in over 15 seconds are shown in grey
 - A rotating compass arrow now shows your current heading on the main screen
 - Beacon now broadcasts every second and includes the compass heading, so nearby users can see your direction arrow
+- Tap a Bluemate in the device list to send a call signal that relays across nearby devices until it reaches the target
+- The target device plays the phone ringtone (using the alarm channel to bypass Do Not Disturb) and the audio stops when the app is opened
+- The target device automatically sends an acknowledgement back so the caller can see the call was received

@@ -30,6 +30,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.snackbar.Snackbar
 
 class MainActivity : AppCompatActivity(), SensorEventListener, BleService.DeviceUpdateListener {
 
@@ -58,6 +59,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
             val binder = service as BleService.LocalBinder
             bleService = binder.getService()
             bleService?.listener = this@MainActivity
+            bleService?.stopCallAudio()
             serviceBound = true
             updateUI()
         }
@@ -123,6 +125,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         deviceList.layoutManager = LinearLayoutManager(this)
         deviceList.adapter = deviceAdapter
 
+        deviceAdapter.onItemClick = { device ->
+            if (device.major >= 0 && device.minor >= 0) {
+                bleService?.sendPing(device.major, device.minor)
+                Snackbar.make(
+                    deviceList,
+                    getString(R.string.call_initiated, device.major, device.minor),
+                    Snackbar.LENGTH_SHORT
+                ).show()
+            }
+        }
+
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
         toggleButton.setOnClickListener {
@@ -150,6 +163,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
     override fun onResume() {
         super.onResume()
         registerSensors()
+        bleService?.stopCallAudio()
     }
 
     override fun onPause() {
@@ -209,6 +223,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         deviceCountText.text = getString(R.string.nearby_count, devices.size)
         emptyText.visibility = if (devices.isEmpty()) android.view.View.VISIBLE else android.view.View.GONE
         deviceList.visibility = if (devices.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+    }
+
+    override fun onAckReceived(targetMajor: Int, targetMinor: Int) {
+        Snackbar.make(
+            deviceList,
+            getString(R.string.call_ack_received, targetMajor, targetMinor),
+            Snackbar.LENGTH_LONG
+        ).show()
     }
 
     private fun requestPermissionsAndStart() {

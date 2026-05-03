@@ -25,4 +25,7 @@
     <string name="notification_title">Bluemate está activo</string>
     <string name="notification_text">Buscando Bluemates cercanos</string>
     <string name="notification_text_beacon">Modo baliza activo (solo anunciar)</string>
+
+    <string name="call_initiated">Llamando a Bluemate #%1$d.%2$d…</string>
+    <string name="call_ack_received">Bluemate #%1$d.%2$d recibió tu llamada</string>
 </resources>

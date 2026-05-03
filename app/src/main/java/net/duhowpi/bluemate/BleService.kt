@@ -19,7 +19,11 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.Ringtone
+import android.media.RingtoneManager
 import android.os.Binder
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -50,6 +54,13 @@ class BleService : Service() {
         const val CLEANUP_INTERVAL_MS = 5_000L
         const val BEACON_REFRESH_INTERVAL_MS = 1_000L
 
+        // Ping/call packet constants
+        const val PACKET_TYPE_PING: Byte = 0x01
+        const val PING_PACKET_SIZE = 10
+        const val PING_TTL = 4
+        const val PING_ADVERTISE_DURATION_MS = 2_000L
+        const val PING_FORWARDED_EXPIRY_MS = 30_000L
+
         @Volatile
         var isRunning = false
             private set
@@ -57,6 +68,8 @@ class BleService : Service() {
 
     interface DeviceUpdateListener {
         fun onDevicesUpdated(devices: List<NearbyDevice>)
+        fun onCallReceived(senderMajor: Int, senderMinor: Int) {}
+        fun onAckReceived(targetMajor: Int, targetMinor: Int) {}
     }
 
     inner class LocalBinder : Binder() {
@@ -83,6 +96,12 @@ class BleService : Service() {
     var compassHeading: Int = 0
         private set
 
+    // Ping/call state
+    private var pingAdvertising = false
+    private val pendingRelays = ArrayDeque<ByteArray>()
+    private val forwardedPings = LinkedHashMap<String, Long>()
+    private var currentRingtone: Ringtone? = null
+
     private val handler = Handler(Looper.getMainLooper())
 
     private fun pairedId(address: String): String = "paired:$address"
@@ -101,7 +120,7 @@ class BleService : Service() {
 
     private val beaconRefreshRunnable = object : Runnable {
         override fun run() {
-            if (isAdvertising) {
+            if (isAdvertising && !pingAdvertising) {
                 restartAdvertising()
             }
             handler.postDelayed(this, BEACON_REFRESH_INTERVAL_MS)
@@ -152,6 +171,7 @@ class BleService : Service() {
         handler.removeCallbacks(beaconRefreshRunnable)
         stopAdvertising()
         stopScanning()
+        stopCallAudio()
         nearbyDevices.clear()
     }
 
@@ -334,6 +354,150 @@ class BleService : Service() {
         compassHeading = heading
     }
 
+    /** Send a call ping to the device identified by [targetMajor] and [targetMinor]. */
+    fun sendPing(targetMajor: Int, targetMinor: Int) {
+        val data = buildPingData(
+            srcMajor = deviceMajor, srcMinor = deviceMinor,
+            dstMajor = targetMajor, dstMinor = targetMinor,
+            ack = 0, ttl = PING_TTL
+        )
+        advertisePing(data)
+    }
+
+    /** Stop any currently playing call ringtone. */
+    fun stopCallAudio() {
+        currentRingtone?.stop()
+        currentRingtone = null
+    }
+
+    /** Build a 10-byte ping packet:
+     *  [0]   type = PACKET_TYPE_PING (0x01)
+     *  [1-2] source major
+     *  [3-4] source minor
+     *  [5-6] destination major
+     *  [7-8] destination minor
+     *  [9]   (ack bit 7) | (ttl bits 6-0)
+     */
+    private fun buildPingData(
+        srcMajor: Int, srcMinor: Int,
+        dstMajor: Int, dstMinor: Int,
+        ack: Int, ttl: Int
+    ): ByteArray {
+        val buffer = ByteBuffer.allocate(PING_PACKET_SIZE)
+        buffer.put(PACKET_TYPE_PING)
+        buffer.putShort(srcMajor.toShort())
+        buffer.putShort(srcMinor.toShort())
+        buffer.putShort(dstMajor.toShort())
+        buffer.putShort(dstMinor.toShort())
+        buffer.put(((ack shl 7) or (ttl and 0x7F)).toByte())
+        return buffer.array()
+    }
+
+    /** Advertise [data] as a ping packet for [PING_ADVERTISE_DURATION_MS] ms, then revert to beacon. */
+    @Suppress("MissingPermission")
+    private fun advertisePing(data: ByteArray) {
+        if (pingAdvertising) {
+            pendingRelays.addLast(data)
+            return
+        }
+        pingAdvertising = true
+
+        advertiser?.stopAdvertising(advertiseCallback)
+        isAdvertising = false
+
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setConnectable(false)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+            .setTimeout(0)
+            .build()
+
+        val advertiseData = AdvertiseData.Builder()
+            .addServiceData(BEACON_PARCEL_UUID, data)
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .build()
+
+        advertiser?.startAdvertising(settings, advertiseData, advertiseCallback)
+
+        handler.postDelayed({
+            pingAdvertising = false
+            val next = pendingRelays.removeFirstOrNull()
+            if (next != null) {
+                advertisePing(next)
+            } else {
+                // Resume normal beacon advertising
+                advertiser?.stopAdvertising(advertiseCallback)
+                isAdvertising = false
+                startAdvertising()
+            }
+        }, PING_ADVERTISE_DURATION_MS)
+    }
+
+    /** Parse a received ping packet and act: ring if we are the target, relay if we are an intermediary. */
+    private fun handlePingPacket(serviceData: ByteArray) {
+        val buffer = ByteBuffer.wrap(serviceData)
+        buffer.get() // skip type byte
+        val srcMajor = buffer.short.toInt() and 0xFFFF
+        val srcMinor = buffer.short.toInt() and 0xFFFF
+        val dstMajor = buffer.short.toInt() and 0xFFFF
+        val dstMinor = buffer.short.toInt() and 0xFFFF
+        val flags = buffer.get().toInt() and 0xFF
+        val ack = (flags ushr 7) and 0x01
+        val ttl = flags and 0x7F
+
+        // Ignore packets originating from this device
+        if (srcMajor == deviceMajor && srcMinor == deviceMinor) return
+
+        if (dstMajor == deviceMajor && dstMinor == deviceMinor) {
+            if (ack == 0) {
+                // Incoming call: play audio and reply with ACK
+                handler.post {
+                    startCallAudio()
+                    listener?.onCallReceived(srcMajor, srcMinor)
+                }
+                val ackData = buildPingData(
+                    srcMajor = deviceMajor, srcMinor = deviceMinor,
+                    dstMajor = srcMajor, dstMinor = srcMinor,
+                    ack = 1, ttl = PING_TTL
+                )
+                advertisePing(ackData)
+            } else {
+                // ACK received: the target confirmed the call
+                handler.post { listener?.onAckReceived(srcMajor, srcMinor) }
+            }
+            return
+        }
+
+        // Relay: forward if TTL allows and we have not already forwarded this ping
+        if (ttl <= 0) return
+
+        val pingId = "$srcMajor.$srcMinor->$dstMajor.$dstMinor:$ack"
+        val now = System.currentTimeMillis()
+        forwardedPings.entries.removeAll { now - it.value > PING_FORWARDED_EXPIRY_MS }
+        if (forwardedPings.containsKey(pingId)) return
+        forwardedPings[pingId] = now
+
+        val relayData = buildPingData(srcMajor, srcMinor, dstMajor, dstMinor, ack, ttl - 1)
+        advertisePing(relayData)
+    }
+
+    /** Play the default ringtone using the alarm audio stream to bypass Do Not Disturb. */
+    private fun startCallAudio() {
+        stopCallAudio()
+        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+        val ringtone = RingtoneManager.getRingtone(applicationContext, uri) ?: return
+        ringtone.audioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ringtone.isLooping = true
+        }
+        ringtone.play()
+        currentRingtone = ringtone
+    }
+
     /** Encode major (2 bytes) + minor (2 bytes) + txPower (1 byte) + heading (2 bytes) = 7 bytes of service data. */
     private fun buildServiceData(): ByteArray {
         val buffer = ByteBuffer.allocate(7)
@@ -361,6 +525,12 @@ class BleService : Service() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val serviceData = result.scanRecord?.getServiceData(BEACON_PARCEL_UUID)
                 ?: return
+
+            // Ping/call packets are 10 bytes and start with PACKET_TYPE_PING
+            if (serviceData.size == PING_PACKET_SIZE && serviceData[0] == PACKET_TYPE_PING) {
+                handlePingPacket(serviceData)
+                return
+            }
 
             if (serviceData.size < 5) return
 
