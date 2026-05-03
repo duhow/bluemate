@@ -69,6 +69,11 @@ class BleService : Service(), SensorEventListener {
         const val PING_ADVERTISE_DURATION_MS = 2_000L
         const val PING_FORWARDED_EXPIRY_MS = 30_000L
 
+        // Call retry / cooldown constants
+        const val CALL_REPEAT_INTERVAL_MS = 1_000L
+        const val CALL_MAX_RETRIES = 30
+        const val CALL_ORIGIN_COOLDOWN_MS = 15_000L
+
         @Volatile
         var isRunning = false
             private set
@@ -111,6 +116,14 @@ class BleService : Service(), SensorEventListener {
     private val forwardedPings = LinkedHashMap<String, Long>()
     private var currentRingtone: Ringtone? = null
 
+    // Active outgoing call retry state
+    var activeCallTarget: Pair<Int, Int>? = null
+        private set
+    private var callRetryCount = 0
+
+    // Per-origin cooldown on callee side (15 s)
+    private val receivedCalls = LinkedHashMap<String, Long>()
+
     // WakeLock to keep the CPU running so BLE scan callbacks are delivered when the screen is off
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -132,6 +145,7 @@ class BleService : Service(), SensorEventListener {
                 !it.value.isPaired && now - it.value.lastSeen > DEVICE_TIMEOUT_MS
             }
             forwardedPings.entries.removeAll { now - it.value > PING_FORWARDED_EXPIRY_MS }
+            receivedCalls.entries.removeAll { now - it.value > CALL_ORIGIN_COOLDOWN_MS }
             if (removed) notifyDevicesUpdated()
             handler.postDelayed(this, CLEANUP_INTERVAL_MS)
         }
@@ -152,6 +166,25 @@ class BleService : Service(), SensorEventListener {
                 restartAdvertising()
             }
             handler.postDelayed(this, BEACON_REFRESH_INTERVAL_MS)
+        }
+    }
+
+    private val callRetryRunnable = object : Runnable {
+        override fun run() {
+            val (dstMajor, dstMinor) = activeCallTarget ?: return
+            if (callRetryCount >= CALL_MAX_RETRIES) {
+                activeCallTarget = null
+                callRetryCount = 0
+                return
+            }
+            callRetryCount++
+            val data = buildPingData(
+                srcMajor = deviceMajor, srcMinor = deviceMinor,
+                dstMajor = dstMajor, dstMinor = dstMinor,
+                ack = 0, ttl = PING_TTL
+            )
+            advertisePing(data)
+            handler.postDelayed(this, CALL_REPEAT_INTERVAL_MS)
         }
     }
 
@@ -184,6 +217,10 @@ class BleService : Service(), SensorEventListener {
         }
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        // Acquire an indefinite PARTIAL_WAKE_LOCK for the lifetime of the foreground service.
+        // This keeps the CPU alive so that BLE scan callbacks are delivered promptly even
+        // when the screen is locked. The lock is always released in onDestroy(), so it is
+        // safe to hold it without a timeout.
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "Bluemate::BleServiceWakeLock"
@@ -221,6 +258,7 @@ class BleService : Service(), SensorEventListener {
         wakeLock = null
         handler.removeCallbacks(cleanupRunnable)
         handler.removeCallbacks(beaconRefreshRunnable)
+        stopCallRetry()
         stopAdvertising()
         stopScanning()
         stopCallAudio()
@@ -483,14 +521,27 @@ class BleService : Service(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
 
-    /** Send a call ping to the device identified by [targetMajor] and [targetMinor]. */
+    /** Send a call ping to the device identified by [targetMajor] and [targetMinor],
+     *  then repeat every [CALL_REPEAT_INTERVAL_MS] up to [CALL_MAX_RETRIES] times
+     *  or until an ACK is received. */
     fun sendPing(targetMajor: Int, targetMinor: Int) {
+        stopCallRetry()
+        activeCallTarget = Pair(targetMajor, targetMinor)
+        callRetryCount = 1
         val data = buildPingData(
             srcMajor = deviceMajor, srcMinor = deviceMinor,
             dstMajor = targetMajor, dstMinor = targetMinor,
             ack = 0, ttl = PING_TTL
         )
         advertisePing(data)
+        handler.postDelayed(callRetryRunnable, CALL_REPEAT_INTERVAL_MS)
+    }
+
+    /** Cancel any in-progress outgoing call retry loop. */
+    fun stopCallRetry() {
+        handler.removeCallbacks(callRetryRunnable)
+        activeCallTarget = null
+        callRetryCount = 0
     }
 
     /** Stop any currently playing call ringtone and dismiss the call notification. */
@@ -583,11 +634,14 @@ class BleService : Service(), SensorEventListener {
         val pingId = "$srcMajor.$srcMinor->$dstMajor.$dstMinor:$ack"
 
         if (dstMajor == deviceMajor && dstMinor == deviceMinor) {
-            // Deduplicate: only handle each unique call/ack once per expiry window
-            if (forwardedPings.containsKey(pingId)) return
-            forwardedPings[pingId] = System.currentTimeMillis()
-
             if (ack == 0) {
+                // Per-origin cooldown: ignore retries within CALL_ORIGIN_COOLDOWN_MS
+                val callKey = "$srcMajor.$srcMinor"
+                val now = System.currentTimeMillis()
+                val lastCall = receivedCalls[callKey]
+                if (lastCall != null && now - lastCall < CALL_ORIGIN_COOLDOWN_MS) return
+                receivedCalls[callKey] = now
+
                 // Incoming call: play audio, show notification and reply with ACK
                 startCallAudio()
                 showCallNotification(srcMajor, srcMinor)
@@ -599,7 +653,11 @@ class BleService : Service(), SensorEventListener {
                 )
                 advertisePing(ackData)
             } else {
-                // ACK received: the target confirmed the call
+                // ACK received: deduplicate using forwardedPings, then stop retrying
+                if (forwardedPings.containsKey(pingId)) return
+                forwardedPings[pingId] = System.currentTimeMillis()
+
+                stopCallRetry()
                 listener?.onAckReceived(srcMajor, srcMinor)
             }
             return

@@ -25,3 +25,5 @@ Initial release.
 - Incoming calls now show a heads-up notification that appears on the lock screen and wakes the device
 - Tap the notification or dismiss it directly from the notification
 - Fixed BLE call reception when the screen is locked or in power save mode
+- Call signal is now repeated every 1 second, up to 30 times, until the target acknowledges the call
+- The same device can no longer be called again by the same origin within 15 seconds
