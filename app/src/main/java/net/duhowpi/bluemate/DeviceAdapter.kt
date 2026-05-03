@@ -33,18 +33,26 @@ class DeviceAdapter : ListAdapter<NearbyDevice, DeviceAdapter.ViewHolder>(DiffCa
     }
 
     var onItemClick: ((NearbyDevice) -> Unit)? = null
+    var onItemLongClick: ((NearbyDevice) -> Unit)? = null
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val device = getItem(position)
         holder.itemView.setOnClickListener { onItemClick?.invoke(device) }
+        holder.itemView.setOnLongClickListener {
+            onItemLongClick?.invoke(device)
+            true
+        }
         val context = holder.itemView.context
-        holder.nameText.text = if (device.major >= 0 && device.minor >= 0) {
-            context.getString(R.string.device_label, device.major, device.minor)
-        } else {
-            context.getString(
-                R.string.paired_device_label,
-                device.displayName ?: device.address ?: context.getString(R.string.device_unknown)
-            )
+        holder.nameText.text = when {
+            device.major >= 0 && device.minor >= 0 -> {
+                device.customName ?: DeviceNameGenerator.generate(device.major, device.minor)
+            }
+            else -> {
+                context.getString(
+                    R.string.paired_device_label,
+                    device.displayName ?: device.address ?: context.getString(R.string.device_unknown)
+                )
+            }
         }
         holder.distanceText.text = if (device.isInRange && device.distance.isFinite()) {
             context.getString(R.string.distance_format, device.distance)
