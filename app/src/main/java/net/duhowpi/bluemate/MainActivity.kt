@@ -18,7 +18,9 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -34,6 +36,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
     private lateinit var compassText: TextView
     private lateinit var statusText: TextView
     private lateinit var deviceCountText: TextView
+    private lateinit var modeSpinner: Spinner
     private lateinit var toggleButton: Button
     private lateinit var deviceList: RecyclerView
     private lateinit var emptyText: TextView
@@ -78,7 +81,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         ActivityResultContracts.StartActivityForResult()
     ) {
         if (isBluetoothEnabled()) {
-            startBleService()
+            startBleService(getSelectedMode())
         }
     }
 
@@ -96,9 +99,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         compassText = findViewById(R.id.compassText)
         statusText = findViewById(R.id.statusText)
         deviceCountText = findViewById(R.id.deviceCountText)
+        modeSpinner = findViewById(R.id.modeSpinner)
         toggleButton = findViewById(R.id.toggleButton)
         deviceList = findViewById(R.id.deviceList)
         emptyText = findViewById(R.id.emptyText)
+
+        modeSpinner.adapter = ArrayAdapter.createFromResource(
+            this,
+            R.array.discovery_mode_options,
+            android.R.layout.simple_spinner_dropdown_item
+        )
 
         deviceList.layoutManager = LinearLayoutManager(this)
         deviceList.adapter = deviceAdapter
@@ -217,7 +227,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         if (!isBluetoothEnabled()) {
             bluetoothEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
         } else {
-            startBleService()
+            startBleService(getSelectedMode())
         }
     }
 
@@ -226,8 +236,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         return manager.adapter?.isEnabled == true
     }
 
-    private fun startBleService() {
-        val intent = Intent(this, BleService::class.java)
+    private fun startBleService(mode: Int) {
+        val intent = Intent(this, BleService::class.java).apply {
+            putExtra(BleService.EXTRA_MODE, mode)
+        }
         ContextCompat.startForegroundService(this, intent)
         didBind = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
@@ -247,14 +259,33 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
 
     private fun updateUI() {
         if (serviceBound) {
+            val serviceMode = bleService?.mode ?: getSelectedMode()
+            modeSpinner.setSelection(
+                if (serviceMode == BleService.MODE_BEACON_ONLY) 1 else 0,
+                false
+            )
+            modeSpinner.isEnabled = false
             toggleButton.text = getString(R.string.btn_stop)
-            statusText.text = getString(R.string.status_scanning)
+            statusText.text = if (serviceMode == BleService.MODE_BEACON_ONLY) {
+                getString(R.string.status_beacon_only)
+            } else {
+                getString(R.string.status_scanning)
+            }
         } else {
+            modeSpinner.isEnabled = true
             toggleButton.text = getString(R.string.btn_start)
             statusText.text = getString(R.string.status_stopped)
             deviceCountText.text = getString(R.string.nearby_count, 0)
             emptyText.visibility = android.view.View.VISIBLE
             deviceList.visibility = android.view.View.GONE
+        }
+    }
+
+    private fun getSelectedMode(): Int {
+        return if (modeSpinner.selectedItemPosition == 1) {
+            BleService.MODE_BEACON_ONLY
+        } else {
+            BleService.MODE_SCAN
         }
     }
 

@@ -18,6 +18,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Binder
 import android.os.Handler
 import android.os.IBinder
@@ -28,6 +29,7 @@ import android.util.Log
 import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import androidx.core.content.ContextCompat
 import kotlin.math.pow
 
 class BleService : Service() {
@@ -37,6 +39,9 @@ class BleService : Service() {
         const val NOTIFICATION_CHANNEL_ID = "bluemate_service"
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "net.duhowpi.bluemate.STOP_SERVICE"
+        const val EXTRA_MODE = "net.duhowpi.bluemate.EXTRA_MODE"
+        const val MODE_SCAN = 0
+        const val MODE_BEACON_ONLY = 1
 
         val BEACON_UUID: UUID = UUID.fromString("b10e0a7e-d0b1-4e00-8a7e-b10e0a7ed0b1")
         val BEACON_PARCEL_UUID = ParcelUuid(BEACON_UUID)
@@ -71,6 +76,8 @@ class BleService : Service() {
     var deviceMajor: Int = 0
         private set
     var deviceMinor: Int = 0
+        private set
+    var mode: Int = MODE_SCAN
         private set
 
     private val handler = Handler(Looper.getMainLooper())
@@ -107,8 +114,6 @@ class BleService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
         mergeBondedDevices()
-        startAdvertising()
-        startScanning()
         handler.postDelayed(cleanupRunnable, CLEANUP_INTERVAL_MS)
     }
 
@@ -117,6 +122,8 @@ class BleService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        val requestedMode = intent?.getIntExtra(EXTRA_MODE, MODE_SCAN) ?: MODE_SCAN
+        applyMode(requestedMode)
         return START_STICKY
     }
 
@@ -158,7 +165,13 @@ class BleService : Service() {
 
         return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
-            .setContentText(getString(R.string.notification_text))
+            .setContentText(
+                if (mode == MODE_BEACON_ONLY) {
+                    getString(R.string.notification_text_beacon)
+                } else {
+                    getString(R.string.notification_text_scan)
+                }
+            )
             .setSmallIcon(R.drawable.ic_bluetooth_notification)
             .setContentIntent(openPending)
             .addAction(
@@ -172,8 +185,27 @@ class BleService : Service() {
             .build()
     }
 
+    private fun updateNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, createNotification())
+    }
+
+    private fun applyMode(requestedMode: Int) {
+        val newMode = if (requestedMode == MODE_BEACON_ONLY) MODE_BEACON_ONLY else MODE_SCAN
+        mode = newMode
+        if (newMode == MODE_BEACON_ONLY) {
+            startAdvertising()
+            stopScanning()
+        } else {
+            startAdvertising()
+            startScanning()
+        }
+        updateNotification()
+    }
+
     @Suppress("MissingPermission")
     private fun startAdvertising() {
+        if (isAdvertising) return
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         if (advertiser == null) {
             Log.w(TAG, "BLE advertising not supported on this device")
@@ -210,6 +242,7 @@ class BleService : Service() {
 
     @Suppress("MissingPermission")
     private fun startScanning() {
+        if (isScanning) return
         scanner = bluetoothAdapter?.bluetoothLeScanner
         if (scanner == null) {
             Log.w(TAG, "BLE scanner not available")
@@ -233,6 +266,7 @@ class BleService : Service() {
 
     @Suppress("MissingPermission")
     private fun mergeBondedDevices() {
+        if (!hasBluetoothConnectPermission()) return
         val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
         bonded.forEach { device ->
             val address = device.address ?: return@forEach
@@ -261,6 +295,13 @@ class BleService : Service() {
             scanner?.stopScan(scanCallback)
             isScanning = false
         }
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.BLUETOOTH_CONNECT
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     /** Encode major (2 bytes) + minor (2 bytes) + txPower (1 byte) = 5 bytes of service data. */
@@ -303,7 +344,11 @@ class BleService : Service() {
             val now = System.currentTimeMillis()
             val device = result.device
             val address = device?.address
-            val isBonded = device?.bondState == BluetoothDevice.BOND_BONDED
+            val isBonded = if (hasBluetoothConnectPermission()) {
+                device?.bondState == BluetoothDevice.BOND_BONDED
+            } else {
+                false
+            }
             if (!address.isNullOrEmpty()) {
                 nearbyDevices.remove(pairedId(address))
             }
