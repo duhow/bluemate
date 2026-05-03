@@ -66,7 +66,7 @@ class DeviceAdapter : ListAdapter<NearbyDevice, DeviceAdapter.ViewHolder>(DiffCa
             holder.arrowText.rotation = heading.toFloat()
             holder.arrowText.setTextColor(textColor)
         } else {
-            holder.arrowText.visibility = View.GONE
+            holder.arrowText.visibility = View.INVISIBLE
         }
     }
 }

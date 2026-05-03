@@ -423,10 +423,17 @@ class BleService : Service() {
         }
     }
 
+    private var updatePending = false
+
     private fun notifyDevicesUpdated() {
-        val devices = nearbyDevices.values
-            .filter { it.isInRange }
-            .sortedBy { it.distance }
-        handler.post { listener?.onDevicesUpdated(devices) }
+        if (updatePending) return
+        updatePending = true
+        handler.postDelayed({
+            updatePending = false
+            val devices = nearbyDevices.values
+                .filter { it.isInRange }
+                .sortedBy { it.distance }
+            listener?.onDevicesUpdated(devices)
+        }, 300L)
     }
 }
