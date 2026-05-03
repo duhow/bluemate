@@ -23,6 +23,7 @@
     <string name="notification_channel_name">Bluemate Service</string>
     <string name="notification_channel_description">Keeps Bluemate scanning in the background</string>
     <string name="notification_title">Bluemate is running</string>
+    <string name="notification_text">Scanning for nearby Bluemates</string>
     <string name="notification_text_scan">Scanning for nearby Bluemates</string>
     <string name="notification_text_beacon">Beacon mode active (announcing only)</string>
 </resources>

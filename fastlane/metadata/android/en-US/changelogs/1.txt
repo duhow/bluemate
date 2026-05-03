@@ -10,3 +10,4 @@ Initial release.
 - Compass heading now updates smoothly every 0.2 seconds
 - Improved Android 13+ nearby discovery reliability by fixing BLE scan matching
 - Paired Bluetooth devices now stay visible in the list, even when temporarily out of range
+- Added a discovery mode selector so you can run scan mode or beacon-only mode for better cross-device detection

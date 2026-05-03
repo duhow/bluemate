@@ -2,18 +2,28 @@
     <string name="app_name">Bluemate</string>
 
     <string name="heading_compass">La teva Brúixola</string>
+    <string name="compass_format">%1$d° %2$s</string>
 
     <string name="btn_start">Iniciar escaneig</string>
     <string name="btn_stop">Aturar escaneig</string>
+    <string name="discovery_mode_label">Mode</string>
 
     <string name="status_scanning">Cercant Bluemates propers…</string>
+    <string name="status_beacon_only">Mode balisa: només anunciar</string>
     <string name="status_stopped">Aturat</string>
 
     <string name="nearby_count">Bluemates propers (%1$d)</string>
     <string name="no_devices">No s\'han trobat dispositius</string>
+    <string name="device_label">Bluemate #%1$d.%2$d</string>
+    <string name="paired_device_label">Aparellat: %1$s</string>
+    <string name="paired_not_in_range">Aparellat (fora d\'abast)</string>
+    <string name="device_unknown">Dispositiu desconegut</string>
+    <string name="distance_format">%1$.1f m</string>
 
     <string name="notification_channel_name">Servei Bluemate</string>
     <string name="notification_channel_description">Manté Bluemate escanejant en segon pla</string>
     <string name="notification_title">Bluemate està actiu</string>
     <string name="notification_text">Cercant Bluemates propers</string>
+    <string name="notification_text_scan">Cercant Bluemates propers</string>
+    <string name="notification_text_beacon">Mode balisa actiu (només anunciar)</string>
 </resources>

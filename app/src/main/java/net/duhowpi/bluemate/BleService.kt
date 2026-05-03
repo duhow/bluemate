@@ -326,6 +326,7 @@ class BleService : Service() {
     }
 
     private val scanCallback = object : ScanCallback() {
+        @Suppress("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val serviceData = result.scanRecord?.getServiceData(BEACON_PARCEL_UUID)
                 ?: return
