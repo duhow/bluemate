@@ -4,15 +4,18 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import android.util.TypedValue
 
 class DeviceAdapter : ListAdapter<NearbyDevice, DeviceAdapter.ViewHolder>(DiffCallback()) {
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val nameText: TextView = view.findViewById(R.id.deviceName)
         val distanceText: TextView = view.findViewById(R.id.deviceDistance)
+        val arrowText: TextView = view.findViewById(R.id.deviceArrow)
     }
 
     private class DiffCallback : DiffUtil.ItemCallback<NearbyDevice>() {
@@ -44,6 +47,26 @@ class DeviceAdapter : ListAdapter<NearbyDevice, DeviceAdapter.ViewHolder>(DiffCa
             context.getString(R.string.distance_format, device.distance)
         } else {
             context.getString(R.string.paired_not_in_range)
+        }
+
+        val isStale = System.currentTimeMillis() - device.lastSeen > 15_000L
+        val textColor = if (isStale) {
+            ContextCompat.getColor(context, R.color.device_stale)
+        } else {
+            val typedValue = TypedValue()
+            context.theme.resolveAttribute(android.R.attr.textColorPrimary, typedValue, true)
+            ContextCompat.getColor(context, typedValue.resourceId)
+        }
+        holder.nameText.setTextColor(textColor)
+        holder.distanceText.setTextColor(textColor)
+
+        val heading = device.compassHeading
+        if (heading != null) {
+            holder.arrowText.visibility = View.VISIBLE
+            holder.arrowText.rotation = heading.toFloat()
+            holder.arrowText.setTextColor(textColor)
+        } else {
+            holder.arrowText.visibility = View.GONE
         }
     }
 }

@@ -34,6 +34,7 @@ import androidx.recyclerview.widget.RecyclerView
 class MainActivity : AppCompatActivity(), SensorEventListener, BleService.DeviceUpdateListener {
 
     private lateinit var compassText: TextView
+    private lateinit var compassArrow: TextView
     private lateinit var statusText: TextView
     private lateinit var deviceCountText: TextView
     private lateinit var modeSpinner: Spinner
@@ -103,6 +104,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         }
 
         compassText = findViewById(R.id.compassText)
+        compassArrow = findViewById(R.id.compassArrow)
         statusText = findViewById(R.id.statusText)
         deviceCountText = findViewById(R.id.deviceCountText)
         modeSpinner = findViewById(R.id.modeSpinner)
@@ -195,6 +197,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
             val azimuthDeg = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toInt()
             val cardinal = getCardinalDirection(azimuthDeg)
             compassText.text = getString(R.string.compass_format, azimuthDeg, cardinal)
+            compassArrow.rotation = azimuthDeg.toFloat()
+            bleService?.setCompassHeading(azimuthDeg)
         }
     }
 

@@ -10,5 +10,6 @@ data class NearbyDevice(
     val address: String? = null,
     val displayName: String? = null,
     val isPaired: Boolean = false,
-    val isInRange: Boolean = true
+    val isInRange: Boolean = true,
+    val compassHeading: Int? = null
 )

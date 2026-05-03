@@ -48,6 +48,7 @@ class BleService : Service() {
         const val TX_POWER_AT_1M: Byte = -59
         const val DEVICE_TIMEOUT_MS = 30_000L
         const val CLEANUP_INTERVAL_MS = 5_000L
+        const val BEACON_REFRESH_INTERVAL_MS = 1_000L
 
         @Volatile
         var isRunning = false
@@ -79,6 +80,8 @@ class BleService : Service() {
         private set
     var mode: Int = MODE_SCAN
         private set
+    var compassHeading: Int = 0
+        private set
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -93,6 +96,15 @@ class BleService : Service() {
             }
             if (removed) notifyDevicesUpdated()
             handler.postDelayed(this, CLEANUP_INTERVAL_MS)
+        }
+    }
+
+    private val beaconRefreshRunnable = object : Runnable {
+        override fun run() {
+            if (isAdvertising) {
+                restartAdvertising()
+            }
+            handler.postDelayed(this, BEACON_REFRESH_INTERVAL_MS)
         }
     }
 
@@ -120,6 +132,7 @@ class BleService : Service() {
         startForeground(NOTIFICATION_ID, createNotification())
         mergeBondedDevices()
         handler.postDelayed(cleanupRunnable, CLEANUP_INTERVAL_MS)
+        handler.postDelayed(beaconRefreshRunnable, BEACON_REFRESH_INTERVAL_MS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -136,6 +149,7 @@ class BleService : Service() {
         super.onDestroy()
         isRunning = false
         handler.removeCallbacks(cleanupRunnable)
+        handler.removeCallbacks(beaconRefreshRunnable)
         stopAdvertising()
         stopScanning()
         nearbyDevices.clear()
@@ -246,6 +260,13 @@ class BleService : Service() {
     }
 
     @Suppress("MissingPermission")
+    private fun restartAdvertising() {
+        advertiser?.stopAdvertising(advertiseCallback)
+        isAdvertising = false
+        startAdvertising()
+    }
+
+    @Suppress("MissingPermission")
     private fun startScanning() {
         if (isScanning) return
         scanner = bluetoothAdapter?.bluetoothLeScanner
@@ -309,12 +330,17 @@ class BleService : Service() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    /** Encode major (2 bytes) + minor (2 bytes) + txPower (1 byte) = 5 bytes of service data. */
+    fun setCompassHeading(heading: Int) {
+        compassHeading = heading
+    }
+
+    /** Encode major (2 bytes) + minor (2 bytes) + txPower (1 byte) + heading (2 bytes) = 7 bytes of service data. */
     private fun buildServiceData(): ByteArray {
-        val buffer = ByteBuffer.allocate(5)
+        val buffer = ByteBuffer.allocate(7)
         buffer.putShort(deviceMajor.toShort())
         buffer.putShort(deviceMinor.toShort())
         buffer.put(TX_POWER_AT_1M)
+        buffer.putShort(compassHeading.toShort())
         return buffer.array()
     }
 
@@ -342,6 +368,9 @@ class BleService : Service() {
             val major = buffer.short.toInt() and 0xFFFF
             val minor = buffer.short.toInt() and 0xFFFF
             val txPower = buffer.get().toInt()
+            // Buffer position is 5 after reading major (2), minor (2), txPower (1).
+            // If the payload is at least 7 bytes there are 2 more bytes available for heading.
+            val heading: Int? = if (serviceData.size >= 7) buffer.short.toInt() and 0xFFFF else null
 
             if (major == deviceMajor && minor == deviceMinor) return
 
@@ -369,7 +398,8 @@ class BleService : Service() {
                 address = address,
                 displayName = device?.name,
                 isPaired = isBonded,
-                isInRange = true
+                isInRange = true,
+                compassHeading = heading
             )
             notifyDevicesUpdated()
         }
@@ -394,10 +424,9 @@ class BleService : Service() {
     }
 
     private fun notifyDevicesUpdated() {
-        val devices = nearbyDevices.values.sortedWith(
-            compareByDescending<NearbyDevice> { it.isInRange }
-                .thenBy { it.distance }
-        )
+        val devices = nearbyDevices.values
+            .filter { it.isInRange }
+            .sortedBy { it.distance }
         handler.post { listener?.onDevicesUpdated(devices) }
     }
 }
