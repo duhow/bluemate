@@ -28,4 +28,10 @@
 
     <string name="call_initiated">Llamando a Bluemate #%1$d.%2$d…</string>
     <string name="call_ack_received">Bluemate #%1$d.%2$d recibió tu llamada</string>
+
+    <string name="notification_call_channel_name">Llamadas entrantes</string>
+    <string name="notification_call_channel_description">Muestra una alerta cuando otro dispositivo Bluemate te llama</string>
+    <string name="notification_call_title">Llamada Bluemate entrante</string>
+    <string name="notification_call_text">Bluemate #%1$d.%2$d te está llamando</string>
+    <string name="btn_dismiss_call">Descartar</string>
 </resources>

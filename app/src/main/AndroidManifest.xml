@@ -30,6 +30,12 @@
     <!-- Audio settings for call ringtone -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- Keep CPU awake for BLE scan callbacks when screen is off -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Full-screen intent for incoming call notification (Android 14+) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <application

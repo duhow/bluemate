@@ -22,3 +22,6 @@ Initial release.
 - Compass heading is now tracked by the background service, so it stays up to date even when the app is in the background or the screen is off
 - Fixed duplicate ringtone and repeated ACK when the same call ping arrived via multiple relay hops
 - Fixed repeated "call received" toasts: each unique call is now acknowledged only once
+- Incoming calls now show a heads-up notification that appears on the lock screen and wakes the device
+- Tap the notification or dismiss it directly from the notification
+- Fixed BLE call reception when the screen is locked or in power save mode

@@ -32,6 +32,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import java.nio.ByteBuffer
@@ -45,8 +46,11 @@ class BleService : Service(), SensorEventListener {
     companion object {
         private const val TAG = "BleService"
         const val NOTIFICATION_CHANNEL_ID = "bluemate_service"
+        const val CALL_NOTIFICATION_CHANNEL_ID = "bluemate_call"
         const val NOTIFICATION_ID = 1
+        const val CALL_NOTIFICATION_ID = 2
         const val ACTION_STOP = "net.duhowpi.bluemate.STOP_SERVICE"
+        const val ACTION_DISMISS_CALL = "net.duhowpi.bluemate.DISMISS_CALL"
         const val EXTRA_MODE = "net.duhowpi.bluemate.EXTRA_MODE"
         const val MODE_SCAN = 0
         const val MODE_BEACON_ONLY = 1
@@ -106,6 +110,9 @@ class BleService : Service(), SensorEventListener {
     private val pendingRelays = ArrayDeque<ByteArray>()
     private val forwardedPings = LinkedHashMap<String, Long>()
     private var currentRingtone: Ringtone? = null
+
+    // WakeLock to keep the CPU running so BLE scan callbacks are delivered when the screen is off
+    private var wakeLock: PowerManager.WakeLock? = null
 
     // Compass sensor state
     private lateinit var sensorManager: SensorManager
@@ -176,7 +183,14 @@ class BleService : Service(), SensorEventListener {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI, handler)
         }
 
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "Bluemate::BleServiceWakeLock"
+        ).apply { acquire() }
+
         createNotificationChannel()
+        createCallNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
         mergeBondedDevices()
         handler.postDelayed(cleanupRunnable, CLEANUP_INTERVAL_MS)
@@ -184,9 +198,15 @@ class BleService : Service(), SensorEventListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_DISMISS_CALL -> {
+                stopCallAudio()
+                return START_STICKY
+            }
         }
         val requestedMode = intent?.getIntExtra(EXTRA_MODE, mode) ?: mode
         applyMode(requestedMode)
@@ -197,6 +217,8 @@ class BleService : Service(), SensorEventListener {
         super.onDestroy()
         isRunning = false
         sensorManager.unregisterListener(this)
+        wakeLock?.release()
+        wakeLock = null
         handler.removeCallbacks(cleanupRunnable)
         handler.removeCallbacks(beaconRefreshRunnable)
         stopAdvertising()
@@ -215,6 +237,19 @@ class BleService : Service(), SensorEventListener {
         }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
+    }
+
+    private fun createCallNotificationChannel() {
+        val channel = NotificationChannel(
+            CALL_NOTIFICATION_CHANNEL_ID,
+            getString(R.string.notification_call_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = getString(R.string.notification_call_channel_description)
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     private fun createNotification(): Notification {
@@ -257,6 +292,52 @@ class BleService : Service(), SensorEventListener {
     private fun updateNotification() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, createNotification())
+    }
+
+    private fun showCallNotification(srcMajor: Int, srcMinor: Int) {
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        val openPending = PendingIntent.getActivity(
+            this, 2, openIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val dismissIntent = Intent(this, BleService::class.java).apply {
+            action = ACTION_DISMISS_CALL
+        }
+        val dismissPending = PendingIntent.getService(
+            this, 3, dismissIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = Notification.Builder(this, CALL_NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(getString(R.string.notification_call_title))
+            .setContentText(getString(R.string.notification_call_text, srcMajor, srcMinor))
+            .setSmallIcon(R.drawable.ic_bluetooth_notification)
+            .setContentIntent(openPending)
+            .setAutoCancel(false)
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_CALL)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(
+                Notification.Action.Builder(
+                    null,
+                    getString(R.string.btn_dismiss_call),
+                    dismissPending
+                ).build()
+            )
+            .apply {
+                val notificationManager = getSystemService(NotificationManager::class.java)
+                @Suppress("NewApi")
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+                    notificationManager.canUseFullScreenIntent()
+                ) {
+                    setFullScreenIntent(openPending, true)
+                }
+            }
+            .build()
+
+        getSystemService(NotificationManager::class.java).notify(CALL_NOTIFICATION_ID, notification)
     }
 
     private fun applyMode(requestedMode: Int) {
@@ -412,11 +493,12 @@ class BleService : Service(), SensorEventListener {
         advertisePing(data)
     }
 
-    /** Stop any currently playing call ringtone. */
+    /** Stop any currently playing call ringtone and dismiss the call notification. */
     fun stopCallAudio() {
         handler.removeCallbacks(ringRepeatRunnable)
         currentRingtone?.stop()
         currentRingtone = null
+        getSystemService(NotificationManager::class.java).cancel(CALL_NOTIFICATION_ID)
     }
 
     /** Build a 10-byte ping packet:
@@ -506,8 +588,9 @@ class BleService : Service(), SensorEventListener {
             forwardedPings[pingId] = System.currentTimeMillis()
 
             if (ack == 0) {
-                // Incoming call: play audio and reply with ACK
+                // Incoming call: play audio, show notification and reply with ACK
                 startCallAudio()
+                showCallNotification(srcMajor, srcMinor)
                 listener?.onCallReceived(srcMajor, srcMinor)
                 val ackData = buildPingData(
                     srcMajor = deviceMajor, srcMinor = deviceMinor,
