@@ -32,8 +32,11 @@ class DeviceAdapter : ListAdapter<NearbyDevice, DeviceAdapter.ViewHolder>(DiffCa
         return ViewHolder(view)
     }
 
+    var onItemClick: ((NearbyDevice) -> Unit)? = null
+
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val device = getItem(position)
+        holder.itemView.setOnClickListener { onItemClick?.invoke(device) }
         val context = holder.itemView.context
         holder.nameText.text = if (device.major >= 0 && device.minor >= 0) {
             context.getString(R.string.device_label, device.major, device.minor)

@@ -16,3 +16,14 @@ Initial release.
 - Devices that have not responded in over 15 seconds are shown in grey
 - A rotating compass arrow now shows your current heading on the main screen
 - Beacon now broadcasts every second and includes the compass heading, so nearby users can see your direction arrow
+- Tap a Bluemate in the device list to send a call signal that relays across nearby devices until it reaches the target
+- The target device plays the phone ringtone (using the alarm channel to bypass Do Not Disturb) and the audio stops when the app is opened
+- The target device automatically sends an acknowledgement back so the caller can see the call was received
+- Compass heading is now tracked by the background service, so it stays up to date even when the app is in the background or the screen is off
+- Fixed duplicate ringtone and repeated ACK when the same call ping arrived via multiple relay hops
+- Fixed repeated "call received" toasts: each unique call is now acknowledged only once
+- Incoming calls now show a heads-up notification that appears on the lock screen and wakes the device
+- Tap the notification or dismiss it directly from the notification
+- Fixed BLE call reception when the screen is locked or in power save mode
+- Call signal is now repeated every 1 second, up to 30 times, until the target acknowledges the call
+- The same device can no longer be called again by the same origin within 15 seconds

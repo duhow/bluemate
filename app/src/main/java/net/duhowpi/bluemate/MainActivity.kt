@@ -8,16 +8,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
+import android.net.Uri
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Spinner
@@ -30,8 +26,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.snackbar.Snackbar
 
-class MainActivity : AppCompatActivity(), SensorEventListener, BleService.DeviceUpdateListener {
+class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
 
     private lateinit var compassText: TextView
     private lateinit var compassArrow: TextView
@@ -42,22 +39,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
     private lateinit var deviceList: RecyclerView
     private lateinit var emptyText: TextView
 
-    private lateinit var sensorManager: SensorManager
     private val deviceAdapter = DeviceAdapter()
 
     private var bleService: BleService? = null
     private var serviceBound = false
     private var didBind = false
-
-    private var accelerometerValues: FloatArray? = null
-    private var magnetometerValues: FloatArray? = null
-    private var lastCompassUpdateMs: Long = 0
-
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as BleService.LocalBinder
             bleService = binder.getService()
             bleService?.listener = this@MainActivity
+            bleService?.stopCallAudio()
             serviceBound = true
             updateUI()
         }
@@ -123,7 +115,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         deviceList.layoutManager = LinearLayoutManager(this)
         deviceList.adapter = deviceAdapter
 
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        deviceAdapter.onItemClick = { device ->
+            if (device.major >= 0 && device.minor >= 0) {
+                bleService?.sendPing(device.major, device.minor)
+                Snackbar.make(
+                    deviceList,
+                    getString(R.string.call_initiated, device.major, device.minor),
+                    Snackbar.LENGTH_SHORT
+                ).show()
+            }
+        }
 
         toggleButton.setOnClickListener {
             if (serviceBound) {
@@ -149,12 +150,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
 
     override fun onResume() {
         super.onResume()
-        registerSensors()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        sensorManager.unregisterListener(this)
+        bleService?.stopCallAudio()
     }
 
     override fun onStop() {
@@ -167,48 +163,25 @@ class MainActivity : AppCompatActivity(), SensorEventListener, BleService.Device
         }
     }
 
-    private fun registerSensors() {
-        sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-        }
-        sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-        }
+    override fun onCompassUpdated(heading: Int) {
+        val cardinal = getCardinalDirection(heading)
+        compassText.text = getString(R.string.compass_format, heading, cardinal)
+        compassArrow.rotation = heading.toFloat()
     }
-
-    override fun onSensorChanged(event: SensorEvent?) {
-        event ?: return
-        when (event.sensor.type) {
-            Sensor.TYPE_ACCELEROMETER -> accelerometerValues = event.values.clone()
-            Sensor.TYPE_MAGNETIC_FIELD -> magnetometerValues = event.values.clone()
-        }
-
-        val accel = accelerometerValues ?: return
-        val magnet = magnetometerValues ?: return
-
-        val rotationMatrix = FloatArray(9)
-        val orientation = FloatArray(3)
-
-        if (SensorManager.getRotationMatrix(rotationMatrix, null, accel, magnet)) {
-            val now = System.currentTimeMillis()
-            if (now - lastCompassUpdateMs < 200) return
-            lastCompassUpdateMs = now
-            SensorManager.getOrientation(rotationMatrix, orientation)
-            val azimuthDeg = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toInt()
-            val cardinal = getCardinalDirection(azimuthDeg)
-            compassText.text = getString(R.string.compass_format, azimuthDeg, cardinal)
-            compassArrow.rotation = azimuthDeg.toFloat()
-            bleService?.setCompassHeading(azimuthDeg)
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onDevicesUpdated(devices: List<NearbyDevice>) {
         deviceAdapter.submitList(devices.toList())
         deviceCountText.text = getString(R.string.nearby_count, devices.size)
         emptyText.visibility = if (devices.isEmpty()) android.view.View.VISIBLE else android.view.View.GONE
         deviceList.visibility = if (devices.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+    }
+
+    override fun onAckReceived(targetMajor: Int, targetMinor: Int) {
+        Snackbar.make(
+            deviceList,
+            getString(R.string.call_ack_received, targetMajor, targetMinor),
+            Snackbar.LENGTH_LONG
+        ).show()
     }
 
     private fun requestPermissionsAndStart() {

@@ -19,11 +19,20 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.media.AudioAttributes
+import android.media.Ringtone
+import android.media.RingtoneManager
 import android.os.Binder
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import java.nio.ByteBuffer
@@ -32,13 +41,16 @@ import java.util.concurrent.ConcurrentHashMap
 import androidx.core.content.ContextCompat
 import kotlin.math.pow
 
-class BleService : Service() {
+class BleService : Service(), SensorEventListener {
 
     companion object {
         private const val TAG = "BleService"
         const val NOTIFICATION_CHANNEL_ID = "bluemate_service"
+        const val CALL_NOTIFICATION_CHANNEL_ID = "bluemate_call"
         const val NOTIFICATION_ID = 1
+        const val CALL_NOTIFICATION_ID = 2
         const val ACTION_STOP = "net.duhowpi.bluemate.STOP_SERVICE"
+        const val ACTION_DISMISS_CALL = "net.duhowpi.bluemate.DISMISS_CALL"
         const val EXTRA_MODE = "net.duhowpi.bluemate.EXTRA_MODE"
         const val MODE_SCAN = 0
         const val MODE_BEACON_ONLY = 1
@@ -50,6 +62,18 @@ class BleService : Service() {
         const val CLEANUP_INTERVAL_MS = 5_000L
         const val BEACON_REFRESH_INTERVAL_MS = 1_000L
 
+        // Ping/call packet constants
+        const val PACKET_TYPE_PING: Byte = 0x01
+        const val PING_PACKET_SIZE = 10
+        const val PING_TTL = 4
+        const val PING_ADVERTISE_DURATION_MS = 2_000L
+        const val PING_FORWARDED_EXPIRY_MS = 30_000L
+
+        // Call retry / cooldown constants
+        const val CALL_REPEAT_INTERVAL_MS = 1_000L
+        const val CALL_MAX_RETRIES = 30
+        const val CALL_ORIGIN_COOLDOWN_MS = 15_000L
+
         @Volatile
         var isRunning = false
             private set
@@ -57,6 +81,9 @@ class BleService : Service() {
 
     interface DeviceUpdateListener {
         fun onDevicesUpdated(devices: List<NearbyDevice>)
+        fun onCompassUpdated(heading: Int) {}
+        fun onCallReceived(senderMajor: Int, senderMinor: Int) {}
+        fun onAckReceived(targetMajor: Int, targetMinor: Int) {}
     }
 
     inner class LocalBinder : Binder() {
@@ -83,6 +110,29 @@ class BleService : Service() {
     var compassHeading: Int = 0
         private set
 
+    // Ping/call state
+    private var pingAdvertising = false
+    private val pendingRelays = ArrayDeque<ByteArray>()
+    private val forwardedPings = LinkedHashMap<String, Long>()
+    private var currentRingtone: Ringtone? = null
+
+    // Active outgoing call retry state
+    var activeCallTarget: Pair<Int, Int>? = null
+        private set
+    private var callRetryCount = 0
+
+    // Per-origin cooldown on callee side (15 s)
+    private val receivedCalls = LinkedHashMap<String, Long>()
+
+    // WakeLock to keep the CPU running so BLE scan callbacks are delivered when the screen is off
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    // Compass sensor state
+    private lateinit var sensorManager: SensorManager
+    private var accelerometerValues: FloatArray? = null
+    private var magnetometerValues: FloatArray? = null
+    private var lastCompassUpdateMs: Long = 0
+
     private val handler = Handler(Looper.getMainLooper())
 
     private fun pairedId(address: String): String = "paired:$address"
@@ -94,17 +144,47 @@ class BleService : Service() {
             val removed = nearbyDevices.entries.removeAll {
                 !it.value.isPaired && now - it.value.lastSeen > DEVICE_TIMEOUT_MS
             }
+            forwardedPings.entries.removeAll { now - it.value > PING_FORWARDED_EXPIRY_MS }
+            receivedCalls.entries.removeAll { now - it.value > CALL_ORIGIN_COOLDOWN_MS }
             if (removed) notifyDevicesUpdated()
             handler.postDelayed(this, CLEANUP_INTERVAL_MS)
         }
     }
 
+    // On API < 28, Ringtone does not support isLooping, so we restart playback manually.
+    private val ringRepeatRunnable = object : Runnable {
+        override fun run() {
+            val ringtone = currentRingtone ?: return
+            if (!ringtone.isPlaying) ringtone.play()
+            handler.postDelayed(this, 1_000L)
+        }
+    }
+
     private val beaconRefreshRunnable = object : Runnable {
         override fun run() {
-            if (isAdvertising) {
+            if (isAdvertising && !pingAdvertising) {
                 restartAdvertising()
             }
             handler.postDelayed(this, BEACON_REFRESH_INTERVAL_MS)
+        }
+    }
+
+    private val callRetryRunnable = object : Runnable {
+        override fun run() {
+            val (dstMajor, dstMinor) = activeCallTarget ?: return
+            if (callRetryCount >= CALL_MAX_RETRIES) {
+                activeCallTarget = null
+                callRetryCount = 0
+                return
+            }
+            callRetryCount++
+            val data = buildPingData(
+                srcMajor = deviceMajor, srcMinor = deviceMinor,
+                dstMajor = dstMajor, dstMinor = dstMinor,
+                ack = 0, ttl = PING_TTL
+            )
+            advertisePing(data)
+            handler.postDelayed(this, CALL_REPEAT_INTERVAL_MS)
         }
     }
 
@@ -128,7 +208,26 @@ class BleService : Service() {
         deviceMajor = (hash ushr 16) and 0xFFFF
         deviceMinor = hash and 0xFFFF
 
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI, handler)
+        }
+        sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI, handler)
+        }
+
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        // Acquire an indefinite PARTIAL_WAKE_LOCK for the lifetime of the foreground service.
+        // This keeps the CPU alive so that BLE scan callbacks are delivered promptly even
+        // when the screen is locked. The lock is always released in onDestroy(), so it is
+        // safe to hold it without a timeout.
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "Bluemate::BleServiceWakeLock"
+        ).apply { acquire() }
+
         createNotificationChannel()
+        createCallNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
         mergeBondedDevices()
         handler.postDelayed(cleanupRunnable, CLEANUP_INTERVAL_MS)
@@ -136,9 +235,15 @@ class BleService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_DISMISS_CALL -> {
+                stopCallAudio()
+                return START_STICKY
+            }
         }
         val requestedMode = intent?.getIntExtra(EXTRA_MODE, mode) ?: mode
         applyMode(requestedMode)
@@ -148,10 +253,15 @@ class BleService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        sensorManager.unregisterListener(this)
+        wakeLock?.release()
+        wakeLock = null
         handler.removeCallbacks(cleanupRunnable)
         handler.removeCallbacks(beaconRefreshRunnable)
+        stopCallRetry()
         stopAdvertising()
         stopScanning()
+        stopCallAudio()
         nearbyDevices.clear()
     }
 
@@ -165,6 +275,19 @@ class BleService : Service() {
         }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
+    }
+
+    private fun createCallNotificationChannel() {
+        val channel = NotificationChannel(
+            CALL_NOTIFICATION_CHANNEL_ID,
+            getString(R.string.notification_call_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = getString(R.string.notification_call_channel_description)
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     private fun createNotification(): Notification {
@@ -207,6 +330,52 @@ class BleService : Service() {
     private fun updateNotification() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, createNotification())
+    }
+
+    private fun showCallNotification(srcMajor: Int, srcMinor: Int) {
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        val openPending = PendingIntent.getActivity(
+            this, 2, openIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val dismissIntent = Intent(this, BleService::class.java).apply {
+            action = ACTION_DISMISS_CALL
+        }
+        val dismissPending = PendingIntent.getService(
+            this, 3, dismissIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = Notification.Builder(this, CALL_NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(getString(R.string.notification_call_title))
+            .setContentText(getString(R.string.notification_call_text, srcMajor, srcMinor))
+            .setSmallIcon(R.drawable.ic_bluetooth_notification)
+            .setContentIntent(openPending)
+            .setAutoCancel(false)
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_CALL)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(
+                Notification.Action.Builder(
+                    null,
+                    getString(R.string.btn_dismiss_call),
+                    dismissPending
+                ).build()
+            )
+            .apply {
+                val notificationManager = getSystemService(NotificationManager::class.java)
+                @Suppress("NewApi")
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+                    notificationManager.canUseFullScreenIntent()
+                ) {
+                    setFullScreenIntent(openPending, true)
+                }
+            }
+            .build()
+
+        getSystemService(NotificationManager::class.java).notify(CALL_NOTIFICATION_ID, notification)
     }
 
     private fun applyMode(requestedMode: Int) {
@@ -330,8 +499,200 @@ class BleService : Service() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun setCompassHeading(heading: Int) {
-        compassHeading = heading
+    override fun onSensorChanged(event: SensorEvent) {
+        when (event.sensor.type) {
+            Sensor.TYPE_ACCELEROMETER -> accelerometerValues = event.values.clone()
+            Sensor.TYPE_MAGNETIC_FIELD -> magnetometerValues = event.values.clone()
+        }
+        val accel = accelerometerValues ?: return
+        val magnet = magnetometerValues ?: return
+        val rotationMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+        if (SensorManager.getRotationMatrix(rotationMatrix, null, accel, magnet)) {
+            val now = System.currentTimeMillis()
+            if (now - lastCompassUpdateMs < 200) return
+            lastCompassUpdateMs = now
+            SensorManager.getOrientation(rotationMatrix, orientation)
+            val azimuthDeg = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toInt()
+            compassHeading = azimuthDeg
+            listener?.onCompassUpdated(azimuthDeg)
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
+
+    /** Send a call ping to the device identified by [targetMajor] and [targetMinor],
+     *  then repeat every [CALL_REPEAT_INTERVAL_MS] up to [CALL_MAX_RETRIES] times
+     *  or until an ACK is received. */
+    fun sendPing(targetMajor: Int, targetMinor: Int) {
+        stopCallRetry()
+        activeCallTarget = Pair(targetMajor, targetMinor)
+        callRetryCount = 1
+        val data = buildPingData(
+            srcMajor = deviceMajor, srcMinor = deviceMinor,
+            dstMajor = targetMajor, dstMinor = targetMinor,
+            ack = 0, ttl = PING_TTL
+        )
+        advertisePing(data)
+        handler.postDelayed(callRetryRunnable, CALL_REPEAT_INTERVAL_MS)
+    }
+
+    /** Cancel any in-progress outgoing call retry loop. */
+    fun stopCallRetry() {
+        handler.removeCallbacks(callRetryRunnable)
+        activeCallTarget = null
+        callRetryCount = 0
+    }
+
+    /** Stop any currently playing call ringtone and dismiss the call notification. */
+    fun stopCallAudio() {
+        handler.removeCallbacks(ringRepeatRunnable)
+        currentRingtone?.stop()
+        currentRingtone = null
+        getSystemService(NotificationManager::class.java).cancel(CALL_NOTIFICATION_ID)
+    }
+
+    /** Build a 10-byte ping packet:
+     *  [0]   type = PACKET_TYPE_PING (0x01)
+     *  [1-2] source major
+     *  [3-4] source minor
+     *  [5-6] destination major
+     *  [7-8] destination minor
+     *  [9]   (ack bit 7) | (ttl bits 6-0)
+     */
+    private fun buildPingData(
+        srcMajor: Int, srcMinor: Int,
+        dstMajor: Int, dstMinor: Int,
+        ack: Int, ttl: Int
+    ): ByteArray {
+        val buffer = ByteBuffer.allocate(PING_PACKET_SIZE)
+        buffer.put(PACKET_TYPE_PING)
+        buffer.putShort(srcMajor.toShort())
+        buffer.putShort(srcMinor.toShort())
+        buffer.putShort(dstMajor.toShort())
+        buffer.putShort(dstMinor.toShort())
+        buffer.put(((ack shl 7) or (ttl and 0x7F)).toByte())
+        return buffer.array()
+    }
+
+    /** Advertise [data] as a ping packet for [PING_ADVERTISE_DURATION_MS] ms, then revert to beacon. */
+    @Suppress("MissingPermission")
+    private fun advertisePing(data: ByteArray) {
+        if (pingAdvertising) {
+            pendingRelays.addLast(data)
+            return
+        }
+        pingAdvertising = true
+
+        advertiser?.stopAdvertising(advertiseCallback)
+        isAdvertising = false
+
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setConnectable(false)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+            .setTimeout(0)
+            .build()
+
+        val advertiseData = AdvertiseData.Builder()
+            .addServiceData(BEACON_PARCEL_UUID, data)
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .build()
+
+        advertiser?.startAdvertising(settings, advertiseData, advertiseCallback)
+
+        handler.postDelayed({
+            pingAdvertising = false
+            val next = pendingRelays.removeFirstOrNull()
+            if (next != null) {
+                advertisePing(next)
+            } else {
+                // Resume normal beacon advertising
+                advertiser?.stopAdvertising(advertiseCallback)
+                isAdvertising = false
+                startAdvertising()
+            }
+        }, PING_ADVERTISE_DURATION_MS)
+    }
+
+    /** Parse a received ping packet and act: ring if we are the target, relay if we are an intermediary. */
+    private fun handlePingPacket(serviceData: ByteArray) {
+        val buffer = ByteBuffer.wrap(serviceData)
+        buffer.get() // skip type byte
+        val srcMajor = buffer.short.toInt() and 0xFFFF
+        val srcMinor = buffer.short.toInt() and 0xFFFF
+        val dstMajor = buffer.short.toInt() and 0xFFFF
+        val dstMinor = buffer.short.toInt() and 0xFFFF
+        val flags = buffer.get().toInt() and 0xFF
+        val ack = (flags ushr 7) and 0x01
+        val ttl = flags and 0x7F
+
+        // Ignore packets originating from this device
+        if (srcMajor == deviceMajor && srcMinor == deviceMinor) return
+
+        val pingId = "$srcMajor.$srcMinor->$dstMajor.$dstMinor:$ack"
+
+        if (dstMajor == deviceMajor && dstMinor == deviceMinor) {
+            if (ack == 0) {
+                // Per-origin cooldown: ignore retries within CALL_ORIGIN_COOLDOWN_MS
+                val callKey = "$srcMajor.$srcMinor"
+                val now = System.currentTimeMillis()
+                val lastCall = receivedCalls[callKey]
+                if (lastCall != null && now - lastCall < CALL_ORIGIN_COOLDOWN_MS) return
+                receivedCalls[callKey] = now
+
+                // Incoming call: play audio, show notification and reply with ACK
+                startCallAudio()
+                showCallNotification(srcMajor, srcMinor)
+                listener?.onCallReceived(srcMajor, srcMinor)
+                val ackData = buildPingData(
+                    srcMajor = deviceMajor, srcMinor = deviceMinor,
+                    dstMajor = srcMajor, dstMinor = srcMinor,
+                    ack = 1, ttl = PING_TTL
+                )
+                advertisePing(ackData)
+            } else {
+                // ACK received: deduplicate using forwardedPings, then stop retrying
+                if (forwardedPings.containsKey(pingId)) return
+                forwardedPings[pingId] = System.currentTimeMillis()
+
+                stopCallRetry()
+                listener?.onAckReceived(srcMajor, srcMinor)
+            }
+            return
+        }
+
+        // Relay: forward if TTL allows and we have not already forwarded this ping
+        if (ttl <= 0) return
+
+        if (forwardedPings.containsKey(pingId)) return
+        forwardedPings[pingId] = System.currentTimeMillis()
+
+        val relayData = buildPingData(srcMajor, srcMinor, dstMajor, dstMinor, ack, ttl - 1)
+        advertisePing(relayData)
+    }
+
+    /** Play the default ringtone using the alarm audio stream to bypass Do Not Disturb. */
+    private fun startCallAudio() {
+        stopCallAudio()
+        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+        val ringtone = RingtoneManager.getRingtone(applicationContext, uri)
+        if (ringtone == null) {
+            Log.w(TAG, "Could not obtain ringtone for call audio")
+            return
+        }
+        ringtone.audioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ringtone.isLooping = true
+        } else {
+            handler.postDelayed(ringRepeatRunnable, 1_000L)
+        }
+        ringtone.play()
+        currentRingtone = ringtone
     }
 
     /** Encode major (2 bytes) + minor (2 bytes) + txPower (1 byte) + heading (2 bytes) = 7 bytes of service data. */
@@ -361,6 +722,13 @@ class BleService : Service() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val serviceData = result.scanRecord?.getServiceData(BEACON_PARCEL_UUID)
                 ?: return
+
+            // Ping/call packets are 10 bytes and start with PACKET_TYPE_PING
+            if (serviceData.size == PING_PACKET_SIZE && serviceData[0] == PACKET_TYPE_PING) {
+                val dataCopy = serviceData.clone()
+                handler.post { handlePingPacket(dataCopy) }
+                return
+            }
 
             if (serviceData.size < 5) return
 
