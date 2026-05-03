@@ -16,9 +16,11 @@ import android.provider.Settings
 import android.net.Uri
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -32,6 +34,7 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
 
     private lateinit var compassText: TextView
     private lateinit var compassArrow: TextView
+    private lateinit var ownNameText: TextView
     private lateinit var statusText: TextView
     private lateinit var deviceCountText: TextView
     private lateinit var modeSpinner: Spinner
@@ -40,6 +43,8 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
     private lateinit var emptyText: TextView
 
     private val deviceAdapter = DeviceAdapter()
+    private lateinit var deviceNaming: DeviceNaming
+    private var lastDevices: List<NearbyDevice> = emptyList()
 
     private var bleService: BleService? = null
     private var serviceBound = false
@@ -97,12 +102,21 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
 
         compassText = findViewById(R.id.compassText)
         compassArrow = findViewById(R.id.compassArrow)
+        ownNameText = findViewById(R.id.ownNameText)
         statusText = findViewById(R.id.statusText)
         deviceCountText = findViewById(R.id.deviceCountText)
         modeSpinner = findViewById(R.id.modeSpinner)
         toggleButton = findViewById(R.id.toggleButton)
         deviceList = findViewById(R.id.deviceList)
         emptyText = findViewById(R.id.emptyText)
+
+        deviceNaming = DeviceNaming(this)
+
+        val ownHash = (Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown").hashCode()
+        ownNameText.text = getString(
+            R.string.your_name,
+            DeviceNameGenerator.generate((ownHash ushr 16) and 0xFFFF, ownHash and 0xFFFF)
+        )
 
         val modeAdapter = ArrayAdapter.createFromResource(
             this,
@@ -118,11 +132,18 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
         deviceAdapter.onItemClick = { device ->
             if (device.major >= 0 && device.minor >= 0) {
                 bleService?.sendPing(device.major, device.minor)
+                val displayName = device.customName ?: DeviceNameGenerator.generate(device.major, device.minor)
                 Snackbar.make(
                     deviceList,
-                    getString(R.string.call_initiated, device.major, device.minor),
+                    getString(R.string.call_initiated_name, displayName),
                     Snackbar.LENGTH_SHORT
                 ).show()
+            }
+        }
+
+        deviceAdapter.onItemLongClick = { device ->
+            if (device.major >= 0 && device.minor >= 0) {
+                showRenameDialog(device)
             }
         }
 
@@ -170,18 +191,48 @@ class MainActivity : AppCompatActivity(), BleService.DeviceUpdateListener {
     }
 
     override fun onDevicesUpdated(devices: List<NearbyDevice>) {
-        deviceAdapter.submitList(devices.toList())
+        lastDevices = devices
+        refreshDeviceList()
         deviceCountText.text = getString(R.string.nearby_count, devices.size)
         emptyText.visibility = if (devices.isEmpty()) android.view.View.VISIBLE else android.view.View.GONE
         deviceList.visibility = if (devices.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
     }
 
     override fun onAckReceived(targetMajor: Int, targetMinor: Int) {
+        val displayName = deviceNaming.getCustomName(targetMajor, targetMinor)
+            ?: DeviceNameGenerator.generate(targetMajor, targetMinor)
         Snackbar.make(
             deviceList,
-            getString(R.string.call_ack_received, targetMajor, targetMinor),
+            getString(R.string.call_ack_received_name, displayName),
             Snackbar.LENGTH_LONG
         ).show()
+    }
+
+    private fun showRenameDialog(device: NearbyDevice) {
+        val generatedName = DeviceNameGenerator.generate(device.major, device.minor)
+        val currentCustom = device.customName
+        val input = EditText(this).apply {
+            hint = generatedName
+            currentCustom?.let { setText(it) }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.rename_dialog_title, generatedName))
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val entered = input.text.toString().trim()
+                deviceNaming.setCustomName(device.major, device.minor, entered.ifEmpty { null })
+                refreshDeviceList()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setNeutralButton(R.string.rename_reset) { _, _ ->
+                deviceNaming.setCustomName(device.major, device.minor, null)
+                refreshDeviceList()
+            }
+            .show()
+    }
+
+    private fun refreshDeviceList() {
+        deviceAdapter.submitList(deviceNaming.applyNames(lastDevices))
     }
 
     private fun requestPermissionsAndStart() {

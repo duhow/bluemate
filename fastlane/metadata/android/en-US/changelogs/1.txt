@@ -27,3 +27,5 @@ Initial release.
 - Fixed BLE call reception when the screen is locked or in power save mode
 - Call signal is now repeated every 1 second, up to 30 times, until the target acknowledges the call
 - The same device can no longer be called again by the same origin within 15 seconds
+- Each Bluemate device now has a unique human-readable name generated from its ID (e.g. "Azure Falcon"), shown in the device list and on your own screen
+- Long-press any nearby device to assign it a custom name; names are saved persistently

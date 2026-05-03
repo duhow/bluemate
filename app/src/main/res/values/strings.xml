@@ -20,6 +20,12 @@
     <string name="device_unknown">Unknown device</string>
     <string name="distance_format">%1$.1f m</string>
 
+    <string name="your_name">Your name: %1$s</string>
+    <string name="rename_dialog_title">Rename "%1$s"</string>
+    <string name="rename_reset">Reset</string>
+    <string name="call_initiated_name">Calling %1$s…</string>
+    <string name="call_ack_received_name">%1$s received your call</string>
+
     <string name="notification_channel_name">Bluemate Service</string>
     <string name="notification_channel_description">Keeps Bluemate scanning in the background</string>
     <string name="notification_title">Bluemate is running</string>
@@ -32,6 +38,6 @@
     <string name="notification_call_channel_name">Incoming Calls</string>
     <string name="notification_call_channel_description">Shows a heads-up alert when another Bluemate device calls you</string>
     <string name="notification_call_title">Incoming Bluemate call</string>
-    <string name="notification_call_text">Bluemate #%1$d.%2$d is calling you</string>
+    <string name="notification_call_text">%1$s is calling you</string>
     <string name="btn_dismiss_call">Dismiss</string>
 </resources>

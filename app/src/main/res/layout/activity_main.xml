@@ -44,7 +44,15 @@
         android:layout_height="wrap_content"
         android:text="@string/status_stopped"
         android:textAppearance="?attr/textAppearanceBodyMedium"
-        android:layout_marginBottom="8dp" />
+        android:layout_marginBottom="4dp" />
+
+    <TextView
+        android:id="@+id/ownNameText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:layout_marginBottom="8dp"
+        tools:text="Your name: Azure Falcon" />
 
     <TextView
         android:id="@+id/deviceCountText"
